@@ -1,0 +1,300 @@
+def adfuller_tester(input_df, maxlag=1):
+    """ return p-values for unit-root null hypothesis test"""
+    tstats = []
+    pvals = []
+    
+    for name, vals in input_df.iteritems():
+        adf = tsa.stattools.adfuller(vals.dropna(), maxlag=maxlag)
+        tstats.append(adf[0])
+        pvals.append("{:.3f}".format(adf[1]))
+    
+    
+    results = pd.DataFrame(np.vstack([tstats,pvals]).T,index=input_df.columns, columns=['tstat','pvals'])
+    
+    return results
+
+
+def _embargo_ts_splitter(data, test_size, max_train_size=None, embargo=0):
+    """
+    Scikit-learn time series split with holdout indices
+    """
+    n_samples = data.shape[0]
+    test_embargo_size = test_size+embargo
+    n_splits = n_samples//test_embargo_size
+    #n_folds = n_splits
+    
+    
+    indices = np.arange(n_samples)
+    if n_splits > n_samples:
+            raise ValueError(("Cannot have number of folds ={0} greater"
+                                 " than the number of samples: {1}.").format(n_folds, n_samples))
+    
+    test_starts = range(test_embargo_size + n_samples % n_splits, n_samples, test_embargo_size)
+    for test_start in test_starts:
+        embargo_start = test_start-embargo
+        if max_train_size and max_train_size < test_start:
+            yield (indices[embargo_start-max_train_size:embargo_start], indices[embargo_start:embargo_start+embargo],
+                   indices[test_start:test_start+test_size])
+        else:
+            yield (indices[:embargo_start], indices[embargo_start:embargo_start+embargo], 
+                   indices[test_start:test_start+test_size])
+
+    
+def _apply_ewma(data, span):
+    """ Apply exponentially weights on data to return transformed decayed info
+    these are weights
+    alpha = 2./(span+1.)
+    alpha_rev = 1-alpha
+    n = data.shape[0]
+    r = np.arange(n)
+    
+    wgts = alpha_rev**r
+    wgts = wgts[::-1]
+    
+    weighted = data.multiply(wgts, axis=0)
+    return weighted
+    """
+    return data.ewm(span=span).mean()
+
+def _build_vec_model(data, deterministic='ci', k_ar_diff=1, display=False):
+    
+    mod = vecm.VECM(data, deterministic=deterministic, k_ar_diff=k_ar_diff).fit()
+    
+    if display:
+        print(mod.summary())
+        
+    return mod
+
+
+def _check_vec_model(mod, alpha_test=0.05, verbose=False):
+    """ Check if model is well specified, i.e. coint rank = 1 and alpha significant at alpha_test"""
+    if mod.alpha[0] < 0:
+        if verbose:
+            print("Coint rank:", mod.coint_rank)
+            print("alpha_0 is positive")
+        return False
+    
+    hl = np.log(-2/mod.alpha[0])
+    if verbose:
+        print("Coint rank:", mod.coint_rank)
+        print("P val on alpha_0:", mod.pvalues_alpha[0])
+        print("Half-life:", hl)
+    test = (mod.coint_rank == 1) and (mod.pvalues_alpha[0] < alpha_test)
+    return test
+    
+    
+def _get_vecm_coint_params(mod):
+    """ returns full beta and alpha from model"""
+    if mod.deterministic != 'ci':
+        wgt = np.array(mod.beta).flatten()
+    else:
+        wgt = np.vstack((mod.const_coint, mod.beta)).flatten()
+    
+    return wgt, mod.alpha[0]
+
+
+def get_insample_coint_resids(mod, raw):
+    """ return in sample coint residuals"""
+    fullbeta = _get_vecm_coint_params(mod)
+    coint_resids = raw.dot(sm.add_constant(fullbeta))
+    
+    return coint_resids
+    
+
+def _build_regression(endog, exog, model, lasso_positive, alpha):
+    """
+        Base ridge regression mod builder.
+    :param endog: (n x 1 array like) dependent variable
+    :param exog: (n x p array like) independent variable(s)
+    :param alpha: (float) regularization param
+    """
+    if model=='Ridge':
+        mod = Ridge(alpha=alpha)
+    elif model=='Lasso':
+        mod = Lasso(alpha=alpha, positive=lasso_positive)
+    else:
+        raise ValueError("Model must be of type Ridge or Lasso")
+    
+    mod.fit(endog, exog)
+    return mod
+
+
+def _regression_loop(endog, exog, model, lasso_positive, alpha=50):
+    """
+        Base regression loop runner, fits ridge and returns insample betas
+    :param endog: (n x 1 array like) dependent variable
+    :param exog: (n x p array like) independent variable(s)
+    :param alpha: (float) regularization param
+    """
+    mod_result = _build_regression(exog, endog, model, lasso_positive, alpha=alpha)
+    beta = np.hstack([mod_result.intercept_, mod_result.coef_])
+    
+    return beta
+
+    
+def _coint_loop(proc_raw, deterministic='ci', k_ar_diff=1):
+    """
+        Base loop runner. Fits VECM on preprocessed subset of data
+    
+    :param proc_raw: (pd.DataFrame) preprocessed data, likely log price, EWMA data resampled at a 
+                        higher-frequency for stability
+    :param deterministic: (string) setting on deterministic terms for vecm fit
+    :param k_ar_diff: (int) setting on autoregressive terms in vecm fit
+    :return: (vecm.VECMResults) the fit model result class
+    """
+    mod = _build_vec_model(proc_raw, deterministic=deterministic, k_ar_diff=k_ar_diff)
+    return mod
+
+
+def clip_betas(new_betas, hist_betas, clippers=[5,95]):
+    """
+        Clips (winsorizes) betas to avoid having them jumping around
+    
+    :param new_betas: np.array (p x 1) of betas
+    :param hist_betas: np.ndarray(p x n) of transposed historical betas
+    :param clippers: percentiles at which to trim
+    """
+    trimmed_hist = [np.clip(hb, np.percentile(hb, clippers[0]), np.percentile(hb, clippers[1]))
+                    for hb in hist_betas.T]
+    trimmed_beta = [b if (b <= max(hb)) and (b >= min(hb)) else
+                       (max(hb) if b > max(hb) else min(hb)) for b,hb in zip(new_betas, trimmed_hist)]
+    return trimmed_beta
+    
+
+def RegressionMain(full_raw, target_col, feature_cols, test_size, model='Ridge', max_train_size=200, embargo_size=1, logpx=True, 
+              resample_per='B', ewm_span=50, verbose=False, alpha_override=None, lasso_positive=False):
+    """
+        Base code to run Ridge framework
+    :param full_raw: (pd.DataFrame) of full raw data
+    :param target_col: (string) dependent variable col name
+    :param feature_cols: (array-like strings) independent variable col name(s)
+    :param test_size: (int) out of sample test size
+    :param max_train_size: (int) maximum rolling window training size
+    :param embargo_size: (int) size of sample to hold out between fits
+    :param logpx: (bool) whether to take log of prices to fit
+    :param resample_per: (datetimeoffset string) resample period for data
+    :param ewm_span: (int) span of EWM to take on data in order to fit
+    """
+    
+    # pre-process
+    cols = np.hstack((target_col, feature_cols))
+    data = full_raw[cols].copy(deep=True)
+    raw_clean = data.asfreq(resample_per).dropna(how='any')
+    data = data.ewm(span=ewm_span).mean()
+    data = data.asfreq(resample_per).dropna(how='any')
+    if logpx:
+        data = data.apply(np.log)
+        raw_clean = raw_clean.apply(np.log)
+        
+    dates, betas = [],[]
+    
+    # get alpha to use in model fits
+    ## we only use first quarter of data to not cheat so hard
+    x_full = data[feature_cols]
+    y_full = data[target_col]
+    x_raw_clean = raw_clean[feature_cols]
+    
+    x_find_alpha = x_full.iloc[:int(data.shape[0]/4)]
+    y_find_alpha = y_full.iloc[:int(data.shape[0]/4)]
+    tss = TimeSeriesSplit(n_splits=500)
+    if model == 'Ridge':
+        cv = RidgeCV(alphas=[x/1000. for x in range(1,100,5)], cv=tss)
+        cv.fit(x_find_alpha, y_find_alpha)
+        alpha = cv.alpha_
+        
+    elif model == 'Lasso':
+        cv = LassoCV(alphas=[x/1000. for x in range(1,100,5)], cv=tss)
+        cv.fit(x_find_alpha, y_find_alpha)
+        alpha = cv.alpha_
+        
+    else:
+        alpha = 0.0001
+    if alpha_override is not None: alpha = alpha_override
+    if verbose: print(alpha)
+    
+    pred_full = pd.Series(name='Pred')
+    for train_idx, embargo_idx, test_idx in _embargo_ts_splitter(data, test_size, max_train_size=max_train_size,
+                                                                    embargo=embargo_size):
+        x_train = x_full.iloc[train_idx]
+        y_train = y_full.iloc[train_idx]
+        beta = _regression_loop(y_train, x_train, model, lasso_positive, alpha=alpha)
+        
+        x_test = x_raw_clean.iloc[test_idx]
+        pred = sm.add_constant(x_test).dot(beta).rename('Pred')
+        pred_full = pred_full.append(pred)
+        
+        # save to return params
+        dates.append(data.index[train_idx[-1]])
+        betas.append(beta)
+    
+    #rescale if necessary
+    if logpx:
+        pred_full = pred_full.apply(np.exp)
+    
+    return pred_full, dates, betas
+        
+    
+def CointMain(full_raw, target_col, feature_cols, test_size, max_train_size=200, embargo_size=1, deterministic='ci', 
+              k_ar_diff=1, logpx=True, resample_per='B', ewm_span=50, beta_clippers=[5,95], return_simple=True):
+    """
+        Base code to run coint framework
+    """
+    # pre-process data
+    cols = np.hstack((target_col, feature_cols))
+    data = full_raw[cols].copy(deep=True)
+    
+    raw_clean = data.asfreq(resample_per).dropna(how='any')
+    data = data.ewm(span=ewm_span).mean()
+    data = data.asfreq(resample_per).dropna(how='any')
+    if logpx:
+        data = data.apply(np.log)
+        raw_clean = raw_clean.apply(np.log)
+    
+    mod_dates = []
+    betas=[]
+    alphas=[]
+    coint_ranks = []
+    alpha_pvals = []
+    mods = []
+    adj_betas = []
+    prev_beta_avg = None
+    c = 0
+    resid_full = pd.Series(name='Pred')
+    for train_idx, embargo_idx, test_idx in _embargo_ts_splitter(data, test_size, max_train_size=max_train_size, 
+                                                                 embargo=embargo_size):
+        
+        mod = _coint_loop(data.iloc[train_idx],deterministic,k_ar_diff)
+        mod_dates.append(data.index[train_idx[-1]])
+        b, a = _get_vecm_coint_params(mod)
+        b = b.flatten()
+        betas.append(b)
+        alphas.append(a[0])
+        
+        # i dont want betas jumping all over the place, trim the betas
+        if c < 5 or beta_clippers is None:
+            adj_betas.append(b)
+            prev_beta_avg = b
+        else:
+            adj_b = clip_betas(np.array(b), np.array(betas), clippers=beta_clippers)
+            adj_betas.append(adj_b)
+        
+        data_test = raw_clean.iloc[test_idx]
+        if deterministic == 'ci':
+            resid = sm.add_constant(data_test).dot(adj_betas[-1]).rename('Pred')
+        else:
+            resid = data_test.dot(adj_betas[-1]).rename('Pred')
+            
+        resid_full = resid_full.append(resid)
+        coint_ranks.append(mod.coint_rank)
+        alpha_pvals.append(mod.pvalues_alpha[0].flatten())
+        mods.append(mod)
+        c+=1
+    
+    if logpx:
+        resid_full = resid_full.apply(np.exp)-1.
+    
+    if return_simple:
+        return resid_full, mod_dates, adj_betas
+    else:
+        return np.array(betas), np.array(alphas), coint_ranks, np.array(alpha_pvals), mods, np.array(adj_betas), mod_dates,resid_full
+    
