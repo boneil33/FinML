@@ -1,0 +1,40 @@
+def adfuller_tester(input_df, maxlag=1):
+    """ return p-values for unit-root null hypothesis test"""
+    tstats = []
+    pvals = []
+    
+    for name, vals in input_df.iteritems():
+        adf = tsa.stattools.adfuller(vals.dropna(), maxlag=maxlag)
+        tstats.append(adf[0])
+        pvals.append("{:.3f}".format(adf[1]))
+    
+    
+    results = pd.DataFrame(np.vstack([tstats,pvals]).T,index=input_df.columns, columns=['tstat','pvals'])
+    
+    return results
+
+
+def _embargo_ts_splitter(data, test_size, max_train_size=None, embargo=0):
+    """
+    Scikit-learn time series split with holdout indices
+    """
+    n_samples = data.shape[0]
+    test_embargo_size = test_size+embargo
+    n_splits = n_samples//test_embargo_size
+    #n_folds = n_splits
+    
+    
+    indices = np.arange(n_samples)
+    if n_splits > n_samples:
+            raise ValueError(("Cannot have number of folds ={0} greater"
+                                 " than the number of samples: {1}.").format(n_folds, n_samples))
+    
+    test_starts = range(test_embargo_size + n_samples % n_splits, n_samples, test_embargo_size)
+    for test_start in test_starts:
+        embargo_start = test_start-embargo
+        if max_train_size and max_train_size < test_start:
+            yield (indices[embargo_start-max_train_size:embargo_start], indices[embargo_start:embargo_start+embargo],
+                   indices[test_start:test_start+test_size])
+        else:
+            yield (indices[:embargo_start], indices[embargo_start:embargo_start+embargo], 
+                   indices[test_start:test_start+test_size])
