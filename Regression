@@ -1,21 +1,16 @@
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import datetime
+import matplotlib.pyplot as plt
+import statsmodels.tsa as tsa
+import statsmodels.tsa.vector_ar.vecm as vecm
+import statsmodels.api as sm
+from statsmodels.multivariate.pca import PCA
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.linear_model import Lasso, Ridge, LassoCV, RidgeCV
 from FinML.Utilities import _embargo_ts_splitter, adfuller_tester, _apply_ewma
 
-
-def _apply_ewma(data, span):
-    """ Apply exponentially weights on data to return transformed decayed info
-    these are weights
-    alpha = 2./(span+1.)
-    alpha_rev = 1-alpha
-    n = data.shape[0]
-    r = np.arange(n)
-    
-    wgts = alpha_rev**r
-    wgts = wgts[::-1]
-    
-    weighted = data.multiply(wgts, axis=0)
-    return weighted
-    """
-    return data.ewm(span=span).mean()
 
 def _build_vec_model(data, deterministic='ci', k_ar_diff=1, display=False):
     
