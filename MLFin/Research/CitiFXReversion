@@ -1,0 +1,36 @@
+
+
+- Generate clusters/classifications:
+    - rolling PCA on standardized vs. USD returns
+    - k-means clusters on PCA weights and rolling return correlations
+    - look at clusters data
+    
+- conclusions so far:
+    - kmeans clusters aren't continuous, this is problematic:
+        - e.g. AUD and NZD can both be in cluster 0, then a slight move could cause AUD to move to 4,
+            there is no distinction between 4 and 3 in terms of similarity to 0, it's just a different cluster
+        - should use a continuous classifier like pairwise distances in the PC weights space
+        - the paper averages trailing 12m clusters generated monthly
+        - so we're gonna use distances < threshold as our clustering mechanism
+
+- Within clusters, generate MR signals:
+    - z-score thresholds on rolling 30d returns -> buy-sell signals
+    - apply to MLdP framework
+        
+        We have signals now on usd pairs-- not the goal
+        TODO:
+        1. Form "in-cluster" combinatoric pairs
+        2. Generate pair zscore timeseries 
+        3. generate MLdP events DF
+        4. Size trades based on inverse concurrency
+            a. maybe instead of first bet = 1, second = 1/2...
+            b. we could do 1 / (w-1), where w = max concurrency so far
+            c. this would have the effect of scaling into bets rather than
+                frontloading them
+        5. Generate pnl from sized signals
+        
+
+
+LATEST:
+- on todo we did 4 on inverse concurrency, could do what's described later
+- do 5!!

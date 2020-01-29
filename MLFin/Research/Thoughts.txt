@@ -1,0 +1,19 @@
+
+todo:
+- application of simple ensemble method to mean-reversion in FX
+    - find the citi paper
+    - replicate it
+    - apply RF
+- principal components regression as applies to 'coint trading' beta generation
+- 
+
+todone:
+- clean data (done)
+- test ETFTrick (looks pretty good)
+
+
+
+Later Projects:
+- Regime switching to enhance mean reversion strategies
+
+https://www.analyticsvidhya.com/blog/2019/10/regime-shift-models-time-series-modeling-financial-markets/
