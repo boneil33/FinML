@@ -41,3 +41,28 @@ def fx_data_import(vs_dollar=True, drop=['USDVEF','DTWEXB','DTWEXM','DTWEXO','US
                 full_data.drop(name, axis=1, inplace=True)
     full_data=full_data.drop(drop, axis=1)
     return full_data
+
+
+def bbg_data_import(vs_dollar=True):
+    close = pd.read_excel('V:/data/fx_data.xlsx', sheet_name='fx_data', index_col=0, na_values='ND')
+    yields = pd.read_excel('V:/data/fx_data.xlsx', sheet_name='Yields', index_col=0, skiprows=2)
+    close = close.dropna(how='all')
+    close = close.fillna(method='ffill')
+    
+    if vs_dollar:
+        # price everything in USD terms
+        for name,s in close.iteritems():
+            
+            if name[:3] != 'USD' and name[3:] == 'USD':
+                close['USD'+name[:3]] = 1./s
+                close.drop(name, axis=1, inplace=True)
+        for name, s in yields.iteritems():
+            if name[:3] != 'USD' and name[3:] == 'USD':
+                yields['USD'+name[:3]] = 1./s
+                yields.drop(name, axis=1, inplace=True)
+    
+    return close, yields
+
+
+if __name__=='__main__':
+    bbg_data_import()
