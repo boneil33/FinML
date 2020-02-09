@@ -8,10 +8,11 @@ Created on Sat Jan 25 17:35:30 2020
 import pandas as pd
 import numpy as np
 import datetime as dt
-from MLFin.Preprocessing.labeling import resample_close, get_t1, get_events, get_lookback_vol
-from MLFin.Research.fx_utils import fx_data_import
-from MLFin.Research.FXTesting import pca_distance_loop, get_nonusd_closes
-from MLFin.Preprocessing.sampling import _get_num_concurrent_events
+from Preprocessing.labeling import resample_close, get_t1, get_events, get_lookback_vol
+from Research.fx_utils import fx_data_import, bbg_data_import
+from Research.FXTesting import pca_distance_loop, get_nonusd_pair_data, get_nonusd_pairs
+from Preprocessing.sampling import _get_num_concurrent_events
+from Preprocessing.etf_trick import ETFTrick
 
 
 def lookback_zscore(close, lookback, vol_lookback):
@@ -80,25 +81,38 @@ def generate_pnl(events, close_tr):
     :param close_tr: (pd.Series) single security total return index
     :return: (pd.Series) strategy pnl series
     """
-    events['ret'] = close_tr[events['t1']]/close_tr[events.index]-1.
+    
+    events['ret'] = close_tr.loc[events['t1']].values/close_tr.loc[events.index].values-1.
     events['ret']*= events['side']*events['size']/events['trgt']
     
     return events
     
     
 if __name__=='__main__':
-    
+    # implement citi reversion
+    # start with just AUDNZD
     pair='AUDNZD'
-    
-    close = fx_data_import()
-    close_w = resample_close(close, 'W-WED')
-    
-    
-    group_matrix = pca_distance_loop(close, 100, 4, 0.2, components_to_use=[1,2,3])
-    pair_closes = get_nonusd_closes(close, group_matrix.columns)
+    c1 = 'USDAUD'
+    c2 = 'USDNZD'
+    close, yields = bbg_data_import(vs_dollar=True)
+    #close_w = resample_close(close, 'W-FRI')
+    crosses, cross_yields = get_nonusd_pair_data(close, yields, ['AUDNZD'])
+    cross_yields = cross_yields.fillna(0)/100./365.
+    weights = pd.DataFrame(np.ones(crosses.shape), index=crosses.index, columns=crosses.columns)
+    tr = ETFTrick(crosses.shift(1), crosses, weights, cross_yields)
+    tr_s = tr.get_etf_series()
+
+#   if we wanted to drop the union of NAs
+#    cross_yields = crosses.merge(yields, left_index=True, right_index=True, suffixes=('_px','_yld'))
+
+    nonusd_pairs = get_nonusd_pairs(close.columns)
+    group_matrix = pca_distance_loop(close, 100, 4, 0.2, nonusd_pairs, components_to_use=[1,2,3])
+    pair_closes, yields = get_nonusd_pair_data(close, yields, nonusd_pairs)
     zscores = lookback_zscore(pair_closes, 30, 200)
     signals = zscore_signal(zscores, 2, 'Reversion')
     group_signals = signals.multiply(group_matrix.loc[signals.index[0]:])
-    events0 = zscore_sizing(group_signals[pair], pair_closes[pair], 100, 30, 100)
-    events = generate_pnl(events0, pair_closes[pair])
+    events0 = zscore_sizing(group_signals[pair], pair_closes[pair], 300, 30, 100)
+    events = generate_pnl(events0, tr_s)
+    
+
     
