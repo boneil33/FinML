@@ -3,17 +3,17 @@ import numpy as np
 import datetime as dt
 import seaborn as sns
 import matplotlib.pyplot as plt
-from MLFin.Preprocessing.etf_trick import ETFTrick
+from Preprocessing.etf_trick import ETFTrick
 import os
 import itertools
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
-from MLFin.Preprocessing.labeling import resample_close
-from MLFin.Preprocessing.feature_importance import get_pca_weights, get_pca_distances
-from MLFin.Research.fx_utils import fx_data_import
+from Preprocessing.labeling import resample_close
+from Preprocessing.feature_importance import get_pca_weights, get_pca_distances
+from Research.fx_utils import fx_data_import
 
 
-def pca_distance_loop(close, window, n_components, cluster_threshold, components_to_use=None):
+def pca_distance_loop(close, window, n_components, cluster_threshold, ccy_pairs, components_to_use=None):
     """
     todo: this should be more general, not just for FX pairs
     Main loop to generate timeseries of currency groups based on pca weight distances
@@ -26,9 +26,6 @@ def pca_distance_loop(close, window, n_components, cluster_threshold, components
     :return: (pd.DataFrame) timeseries indicator of distinct below threshold pairs (e.g. BRLMXN)
     """
     close = close.dropna(how='any')
-    non_usd = [s[-3:] for s in close.columns]
-    combos = itertools.combinations(non_usd, 2)
-    ccy_pairs = [i[0]+i[1] for i in combos]
     # full timeseries
     distance_group_ts = pd.DataFrame(np.zeros((close.shape[0], len(ccy_pairs))), 
                                      index=close.index, columns=ccy_pairs)
@@ -63,19 +60,35 @@ def pca_distance_loop(close, window, n_components, cluster_threshold, components
     return distance_group_ts
 
 
-def get_nonusd_closes(close, nonusd_cols):
+def get_nonusd_pair_data(close, yields, nonusd_cols):
     """
     Get nonusd ccy pair closes (e.g. EURGBP) from USD denom closes
+    all yields from bbg (e.g. EURI3M, or CHFI3M) are nonUSD yields
     """
     nonusd_close = pd.DataFrame(index=close.index)
+    nonusd_yields = pd.DataFrame(index=close.index)
     for col in nonusd_cols:
         col1 = col[:3]
         col2 = col[-3:]
-        srs1 = close['USD'+col1]
-        srs2 = close['USD'+col2]
-        nonusd_close[col] = srs2.divide(srs1)
+        c1 = close['USD'+col1]
+        c2 = close['USD'+col2]
+        y1 = yields['USD'+col1]
+        y2 = yields['USD'+col2]
+        nonusd_close[col] = c2.divide(c1)
+        nonusd_yields[col] = y1.subtract(y2)
     
-    return nonusd_close
+    return nonusd_close, nonusd_yields
+    
+
+def get_nonusd_pairs(close_cols):
+    """
+    Get the nonUSD pairs
+    """
+    non_usd = [s[-3:] for s in close_cols]
+    combos = itertools.combinations(non_usd, 2)
+    ccy_pairs = [i[0]+i[1] for i in combos]
+    
+    return ccy_pairs
 
 
 if __name__=='__main__':
