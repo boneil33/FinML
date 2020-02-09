@@ -169,7 +169,7 @@ class ETFTrick():
         External method to retrieve ETF series
         :return: (pd.Series) time series of synthetic ETF values
         """
-        data = self._generate_trick_components(output=True)
+        data = self._generate_trick_components(output=False)
         
         # delete first row that will have NaNs from price diffs
         data = data
