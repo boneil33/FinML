@@ -13,8 +13,8 @@ import itertools
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
-from MLFin.Preprocessing.labeling import resample_close
-from MLFin.Research.fx_utils import fx_data_import
+from Preprocessing.labeling import resample_close
+from Research.fx_utils import fx_data_import
 
 
 def get_pca_weights(close, window, n_components=None, ret_pca=False):
