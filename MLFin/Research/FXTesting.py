@@ -39,7 +39,6 @@ def pca_distance_loop(close, window, n_components, cluster_threshold, ccy_pairs,
         sub_close = close.iloc[idx-sample_window:idx]
             
         components = get_pca_weights(sub_close, window, n_components=n_components)
-        # reset at 0
         
         distances = get_pca_distances(components)
         # usd-pair distances to non_usd pairs
@@ -59,6 +58,24 @@ def pca_distance_loop(close, window, n_components, cluster_threshold, ccy_pairs,
         
     return distance_group_ts
 
+
+def get_nonusd_close(close, nonusd_cols):
+    """
+    Get nonusd ccy pair closes (e.g. EURGBP) from USD denom closes
+    
+    """
+    nonusd_close = pd.DataFrame(index=close.index)
+    
+    for col in nonusd_cols:
+        col1 = col[:3]
+        col2 = col[-3:]
+        c1 = close['USD'+col1]
+        c2 = close['USD'+col2]
+        nonusd_close[col] = c2.divide(c1)
+    
+    
+    return nonusd_close
+    
 
 def get_nonusd_pair_data(close, yields, nonusd_cols):
     """

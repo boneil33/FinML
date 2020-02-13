@@ -9,19 +9,20 @@ import pandas as pd
 import numpy as np
 
 
-def fx_data_import(vs_dollar=True, drop=['USDVEF','DTWEXB','DTWEXM','DTWEXO','USDMYR']):
-    main_f = "C:/Users/Brendan/MLFin/raw_data/"
+def fx_data_import(vs_dollar=True, drop=[]):
+    main_f = r"C:/Users/Brendan/FinML/MLFin/raw_data/"
     file_names = os.listdir(main_f)
     #japan has the full hist
     file_map = {'DEXBZUS':'USDBRL', 'DEXCAUS':'USDCAD', 'DEXCHUS': 'USDCNY', 'DEXDNUS':'USDDKK',
                 'DEXHKUS': 'USDHKD','DEXINUS':'USDINR','DEXJPUS':'USDJPY','DEXKOUS':'USDKRW',
-                'DEXMAUS':'USDMYR','DEXMXUS':'USDMXN','DEXNOUS':'USDNOK','DEXSDUS':'USDSEK',
+                'DEXMXUS':'USDMXN','DEXNOUS':'USDNOK','DEXSDUS':'USDSEK',
                 'DEXSFUS':'USDZAR','DEXSLUS':'USDSLR','DEXSZUS':'USDCHF','DEXSIUS':'USDSGD',
                 'DEXTAUS':'USDTWD','DEXTHUS':'USDTHB','DEXUSAL':'AUDUSD','DEXUSEU':'EURUSD',
-                'DEXUSNZ':'NZDUSD','DEXUSUK':'GBPUSD','DEXVZUS':'USDVEF'
+                'DEXUSNZ':'NZDUSD','DEXUSUK':'GBPUSD'
      }
     frames = []
-    for f in file_names:
+    for f in file_map.keys():
+        f+='.csv'
         df = pd.read_csv(main_f+f, index_col=0, parse_dates=True)
         df['VALUE'] = pd.to_numeric(df['VALUE'], 
           errors='coerce').fillna(method='ffill')

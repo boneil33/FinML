@@ -64,6 +64,8 @@ def zscore_sizing(signals, close, vertbar, lookback, vol_lookback):
     events, df0 = get_events(events0, close, trgt, pt_sl=(1,4))
     
     # generate sizing based on inverse concurrency
+    if len(events)==0:
+        return None
     concurrent = _get_num_concurrent_events(close.index, events['t1'])
     sizes = concurrent.loc[events.index].rename('size')
     events = events.merge(1./sizes, left_index=True, right_index=True)
