@@ -121,7 +121,7 @@ def _get_barrier_touched(df0, events):
     return df0
 
 
-def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001):
+def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=None):
     """
     :param events: (pd.DataFrame) index=entry, t1=timeouts, side=tradeside
     :param close: (pd.Series) of close prices
@@ -139,7 +139,11 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001):
         pt_sl = [pt_sl[0], pt_sl[0]]
     events['trgt'] = trgt
     events = events.dropna(subset=['trgt'])
-    df0 = _apply_pt_sl(events, close, pt_sl)
+    if model_resids is not None:
+        df0 = _apply_pt_sl_vs_model(events, close, model_resids, pt_sl)
+    else:
+        df0 = _apply_pt_sl(events, close, pt_sl)
+    
     events['t1'] = df0.dropna(how='all').min(axis=1)
     
     if not side_pred:
@@ -147,7 +151,7 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001):
     return events, df0
 
 
-def get_bins(events, close)
+def get_bins(events, close):
     """
     Generate outcomes for events
     :param events: (pd.DataFrame) index=entry, t1=exit, trgt, side (optional)
