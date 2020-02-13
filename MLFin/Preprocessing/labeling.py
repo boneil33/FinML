@@ -67,6 +67,36 @@ def _apply_pt_sl(events, close, pt_sl=(1,1)):
     return out
 
 
+def _apply_pt_sl_vs_model(events, close, model_resids, pt_sl=(1,1)):
+    """
+    Applies tp/sl based on model residual zscores, pt_sl in terms of zscore
+    
+    e.g. pt = 0.25, sl = 2.0, signal generated at -1.0 (not provided)
+        we would stop out at side*2.0 (-2) and tp at at 0.25*side (-0.25)
+    :param events: (pd.DataFrame) index=entry, t1=timeouts, trgt=trailing vol
+        signal, side=trade side
+    :param close: (pd.Series) close prices
+    :param model_resids: (pd.Series) model_residual series zscores
+    :param tp_sl: (list) 2-tuple take profit/stop loss
+    :return: (pd.DataFrame) adds t1, sl, tp to events
+    """
+    if 'side' not in events.columns:
+        raise ValueError('Side must be provided for model pt_sl generation')
+    
+    out = events['t1'].copy(deep=True).to_frame()
+    out['tp'] = pd.NaT
+    out['sl'] = pd.NaT
+    tp = pt_sl[0]*events['side']
+    sl = pt_sl[1]*events['side']
+    
+    for loc, t1 in events['t1'].fillna(close.index[-1]).iteritems():
+        # residuals at each point from loc:t1
+        df0 = model_resids.loc[loc:t1]
+        out.loc[loc, 'tp'] = df0[abs(df0)<abs(tp.loc[loc])].index.min() # earliest tp
+        out.loc[loc, 'sl'] = df0[abs(df0)>abs(sl.loc[loc])].index.min()
+    return out
+    
+    
 def _get_barrier_touched(df0, events):
     """
     :param df0: (pd.DataFrame) contains returns and targets
@@ -117,7 +147,7 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001):
     return events, df0
 
 
-def get_bins(events, close):
+def get_bins(events, close)
     """
     Generate outcomes for events
     :param events: (pd.DataFrame) index=entry, t1=exit, trgt, side (optional)

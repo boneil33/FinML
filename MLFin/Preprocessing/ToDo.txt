@@ -1,0 +1,3 @@
+
+
+1. allow for pt_sl to be applied on a secondary series
