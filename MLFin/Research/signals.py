@@ -11,7 +11,7 @@ import datetime as dt
 from Preprocessing.labeling import resample_close, get_t1, get_events, get_lookback_vol
 from Research.fx_utils import fx_data_import, bbg_data_import
 from Research.FXTesting import pca_distance_loop, get_nonusd_pair_data, get_nonusd_pairs
-from Preprocessing.sampling import _get_num_concurrent_events
+from Preprocessing.sampling import get_num_conc_events_side, get_max_concurrency
 from Preprocessing.etf_trick import ETFTrick
 
 
@@ -46,7 +46,7 @@ def zscore_signal(zscores, threshold, signal_type='Reversion'):
     return signals
 
 
-def zscore_sizing(signals, close, vertbar, lookback, vol_lookback):
+def zscore_sizing(signals, close, vertbar, lookback, vol_lookback, pt_sl=(1,1)):
     """
     Generate events dataframe with sizes
     
@@ -61,14 +61,24 @@ def zscore_sizing(signals, close, vertbar, lookback, vol_lookback):
     trgt = get_lookback_vol(close, lookback, volwindow=vol_lookback,ewma=False)
     events0 = t1.rename('t1').to_frame().merge(filtered_signals.rename('side'),
                         left_index=True, right_index=True)
-    events, df0 = get_events(events0, close, trgt, pt_sl=(1,4))
+    events, df0 = get_events(events0, close, trgt, pt_sl=pt_sl)
     
     # generate sizing based on inverse concurrency
     if len(events)==0:
         return None
-    concurrent = _get_num_concurrent_events(close.index, events['t1'])
-    sizes = concurrent.loc[events.index].rename('size')
-    events = events.merge(1./sizes, left_index=True, right_index=True)
+    concurrent = get_num_conc_events_side(close.index, events)
+    max_conc = get_max_concurrency(events, concurrent)
+    max_conc = max_conc.loc[events.index].rename('max_conc')
+    events = events.merge(max_conc, left_index=True, right_index=True)
+    events = events.merge(concurrent, left_index=True, right_index=True)
+    events['size'] = 1./events.loc[:, 'max_conc']
+    events['size']*= events.apply(lambda x: x['long'] if x['side']>0 else (
+                                      x['short'] if x['side']<0 else 0), axis=1)
+    # if this is the first run, size is 0.1
+    max_long = ((events['side']>0) & (events['long']==events['max_conc']))
+    max_short = ((events['side']<0) & (events['short']==events['max_conc']))
+    events['size'] = events['size'].mask(max_long, 0.1)
+    events['size'] = events['size'].mask(max_short, 0.1)
     return events
 
 

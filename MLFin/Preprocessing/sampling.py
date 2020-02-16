@@ -19,12 +19,36 @@ def _get_num_concurrent_events(close_index, t1):
     t1 = t1.fillna(close_index[-1])
     rel_idxs = [close_index.searchsorted(t1.index[0]),
                 close_index.searchsorted(t1.max())]
-    count = pd.Series(0, index=close_index[rel_idxs[0]:rel_idxs[-1]+1])
+    count = pd.Series(0, index=close_index[rel_idxs[0]:rel_idxs[-1]+1], name='c')
     for t_in, t_out in t1.iteritems():
         count.loc[t_in:t_out] += 1
     return count
 
 
+def get_num_conc_events_side(close_index, events):
+    """
+    Get number of concurrent events per side
+    
+    :param close_index: (pd.DateIndex) close datestamps
+    :param events: (pd.DataFrame) events df with t1, side cols
+    :return: (pd.DataFrame) number of live events per side indexed by closepx dates
+    """
+    events = events.copy(deep=True)
+    events['t1'] = events.loc[:,'t1'].fillna(close_index[-1])
+    rel_idxs = [close_index.searchsorted(events.index[0]),
+                close_index.searchsorted(events['t1'].max())]
+    close_rel_idx = close_index[rel_idxs[0]:rel_idxs[-1]+1]
+    count = pd.DataFrame(np.zeros((len(close_rel_idx), 2)), index=close_rel_idx,
+                         columns=['long','short'])
+    for row in events.itertuples():
+        if row.side>0:
+            count.loc[row.Index:row.t1, 'long']+=1
+        elif row.side<0:
+            count.loc[row.Index:row.t1, 'short']+=1
+    
+    return count
+
+    
 def _get_average_uniqueness(t1, num_conc_events):
     """
     :param t1: (pd.Series) end stamps indexed by entries
@@ -36,7 +60,29 @@ def _get_average_uniqueness(t1, num_conc_events):
         wgt.loc[t_in] = (1./num_conc_events.loc[t_in:t_out]).mean()
     
     return wgt
+
+
+def get_max_concurrency(events, num_conc_events):
+    """
+    Generate max concurrency per event index
     
+    :param events: (pd.DataFrame) events df with t1, side cols
+    :param num_conc_events: (pd.DataFrame/Series) concurrent events per entry stamp, (per side)
+    :return: (pd.Series) max previous live events (where side=thisrow side) indexed by events dates
+    """
+    if not isinstance(num_conc_events, pd.DataFrame):
+        raise ValueError('num_conc_events must be DataFrame, got: ',
+                         type(num_conc_events))
+    
+    out = pd.Series(0, index=events.index, name='maxsideconc')
+    for row in events.itertuples():
+        if row.side>0:
+            out.loc[row.Index] = num_conc_events.loc[:row.Index, 'long'].max()
+        elif row.side<0:
+            out.loc[row.Index] = num_conc_events.loc[:row.Index, 'short'].max()
+    
+    return out
+
 
 def get_events_avg_uniqueness(close, t1):
     """
@@ -49,7 +95,7 @@ def get_events_avg_uniqueness(close, t1):
     out = pd.DataFrame(index=close.index)
     num_conc_events = _get_num_concurrent_events(close.index, t1)
     avg_uniq = _get_average_uniqueness(t1, num_conc_events)
-    out['t1'] = avg_uniq
+    out['tw'] = avg_uniq
     return out
 
 
@@ -117,3 +163,6 @@ def seq_bootstrap(ind_mat, sample_length=None, random_state=np.random.RandomStat
     
     return phi
 
+
+if __name__=='__main__':
+    events = pd.DataFrame([0])

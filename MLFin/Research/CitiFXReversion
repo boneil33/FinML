@@ -24,13 +24,13 @@
         3. generate MLdP events DF
         4. Size trades based on inverse concurrency
             a. maybe instead of first bet = 1, second = 1/2...
-            b. we could do 1 / (w-1), where w = max concurrency so far
+            b. we could do 1 / W_{t,s}, where W_{t,s} = max concurrency up to t
+                for side s (long/short)
             c. this would have the effect of scaling into bets rather than
                 frontloading them
         5. Generate pnl from sized signals
-        
+        6. FEATURE IMPORTANCE
 
 
 LATEST:
-- on todo we did 4 on inverse concurrency, could do what's described later
-- do 5!!
+6
