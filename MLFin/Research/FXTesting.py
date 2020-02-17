@@ -9,7 +9,7 @@ import itertools
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from Preprocessing.labeling import resample_close
-from Preprocessing.feature_importance import get_pca_weights, get_pca_distances
+from Modelling.feature_importance import get_pca_weights, get_pca_distances
 from Research.fx_utils import fx_data_import
 
 

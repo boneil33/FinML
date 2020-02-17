@@ -148,6 +148,8 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=N
     
     if not side_pred:
         events = events.drop('side', axis=1)
+    events['tp'] = pt_sl[0]
+    events['sl'] = pt_sl[1]
     return events, df0
 
 
@@ -160,7 +162,7 @@ def get_bins(events, close):
     :param close: (pd.Series) close prices
     :return: (pd.DataFrame) meta-labeled events
     """
-    events_ = events.copy(deep=True).dropna(subset='t1')
+    events_ = events.copy(deep=True).dropna(subset=['t1'])
     # in case t1 doesnt have to have same sample as entries
     all_dates = events_.index.union(other=events_['t1'].values).drop_duplicates()
     log_close = close.reindex(all_dates, method='bfill').apply(np.log)
@@ -176,7 +178,7 @@ def get_bins(events, close):
     df0 = _get_barrier_touched(df0, events)
     
     if 'side' in events.columns:
-        df0[df0['ret'] <= 0, 'bin'] = 0
+        df0.loc[df0['ret'] <= 0,'bin'] = 0
         df0['side'] = events_['side']
     #back to arithmetic returns
     df0['ret'] = np.exp(df0['ret'])-1

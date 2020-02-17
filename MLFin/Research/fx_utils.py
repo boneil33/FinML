@@ -65,5 +65,22 @@ def bbg_data_import(vs_dollar=True):
     return close, yields
 
 
+def macro_data_import(home=True):
+    vix = pd.read_csv('C:/Users/Brendan/Downloads/^VIX.csv', index_col=0, parse_dates=True)
+    vix = vix.loc[:,'Close']
+    commod_index = pd.read_excel('C:/Users/Brendan/Downloads/PALLFNFINDEXM.xls', index_col=0, 
+                                 parse_dates=True, skiprows=10)
+    baa_spread = pd.read_excel('C:/Users/Brendan/Downloads/BAA10Y.xls', index_col=0, 
+                                 parse_dates=True, skiprows=10)
+    bill_3m = pd.read_excel('C:/Users/Brendan/Downloads/DGS3MO.xls', index_col=0, 
+                                 parse_dates=True, skiprows=10)
+    real_yield10 = pd.read_excel('C:/Users/Brendan/Downloads/DFII10.xls', index_col=0, 
+                                 parse_dates=True, skiprows=10)
+    srs = [vix, commod_index, baa_spread, bill_3m, real_yield10]
+    for s in srs:
+        s = s.fillna(method='ffill').dropna()
+    out = pd.concat(srs, axis=1)
+    return out
+    
 if __name__=='__main__':
     bbg_data_import()
