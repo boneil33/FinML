@@ -99,6 +99,34 @@ def generate_pnl(events, close_tr):
     
     return events
     
+
+def generate_mtm_pnl(events, close_tr, log_diff=True):
+    """
+    Generate daily mark to market pnl from events.
+    todo: paralellize this to test yourself!
+    
+    :param events: 'events' dataframe with t1, side, size, trgt
+    :param close_tr: (pd.Series) single security total return index
+    :return: (pd.Series) mark to market pnl per index on close_tr
+    """
+    events = events.copy(deep=True)
+    close = close_tr.copy(deep=True)
+    
+    events.loc[:, 't1'] = events.loc[:, 't1'].fillna(close_tr.index[-1])
+    
+    if log_diff:
+        close = close.apply(np.log)
+    close_diff = close.diff(1).fillna(0)
+    pnl_df = pd.Series(0, index=close_tr.index)
+    for loc, row in events.itertuples():
+        pnl_df.loc[loc:t1] += close_diff.loc[loc:t1]*row.side*row.size*row.trgt
+    
+    #re-exponentiate
+    if log_diff:
+        pnl_df = pnl_df.apply(np.exp)-1.
+    
+    return pnl_df
+
     
 if __name__=='__main__':
     # implement citi reversion
