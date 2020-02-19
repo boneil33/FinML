@@ -113,19 +113,31 @@ def generate_mtm_pnl(events, close_tr, log_diff=True):
     close = close_tr.copy(deep=True)
     
     events.loc[:, 't1'] = events.loc[:, 't1'].fillna(close_tr.index[-1])
-    
+    if 'size' not in events.columns:
+        events['size'] = 1.
     if log_diff:
         close = close.apply(np.log)
     close_diff = close.diff(1).fillna(0)
     pnl_df = pd.Series(0, index=close_tr.index)
-    for loc, row in events.itertuples():
-        pnl_df.loc[loc:row.t1] += close_diff.loc[loc:row.t1]*row.side*row.size*row.trgt
+    for row in events.itertuples():
+        pnl_df.loc[row.Index:row.t1] += close_diff.loc[row.Index:row.t1]*row.side*row.size*row.trgt
     
     #re-exponentiate
     if log_diff:
         pnl_df = pnl_df.apply(np.exp)-1.
     
     return pnl_df
+
+
+def generate_exposures(events, close):
+    """
+    Generate exposure per day
+    """
+    exposures = pd.Series(0, index=close.index)
+    for row in events.itertuples():
+        exposures.loc[row.Index:row.t1] += row.side*row.size
+    
+    return exposures
 
     
 if __name__=='__main__':
