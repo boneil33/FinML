@@ -119,7 +119,7 @@ def generate_mtm_pnl(events, close_tr, log_diff=True):
     close_diff = close.diff(1).fillna(0)
     pnl_df = pd.Series(0, index=close_tr.index)
     for loc, row in events.itertuples():
-        pnl_df.loc[loc:t1] += close_diff.loc[loc:t1]*row.side*row.size*row.trgt
+        pnl_df.loc[loc:row.t1] += close_diff.loc[loc:row.t1]*row.side*row.size*row.trgt
     
     #re-exponentiate
     if log_diff:
