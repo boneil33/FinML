@@ -46,14 +46,16 @@ def zscore_signal(zscores, threshold, signal_type='Reversion'):
     return signals
 
 
-def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(1,1), trgt=None, model_resids=None):
+def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(1,1), 
+                  trgt=None, model_resids=None, max_signals=None, even_weight=False):
     """
     Generate events dataframe with sizes
     
     :param signals: (pd.Series) single security buy/sell signals
     :param close: (pd.Series) single security close prices
     :param vertbar: (int) time out after vertbar indices pass
-    :param model_resids: 
+    :param model_resids: (pd.Series) (optional) external model residuals to pass to get_events
+    :param max_signals: (int) (optional) max number of concurrent signals to accept
     :return: (pd.DataFrame) 'events' dataframe with t1, side, size, trgt
     """
     # get events dataframe
@@ -73,16 +75,26 @@ def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(
     max_conc = max_conc.loc[events.index].rename('max_conc')
     events = events.merge(max_conc, left_index=True, right_index=True)
     events = events.merge(concurrent, left_index=True, right_index=True)
-    events['size'] = 1./events.loc[:, 'max_conc']
-    events['size']*= events.apply(lambda x: x['long'] if x['side']>0 else (
-                                      x['short'] if x['side']<0 else 0), axis=1)
+    events['size'] = 1.
+    if not even_weight:
+        events['size']/= events.loc[:, 'max_conc']
+        events['size']*= events.apply(lambda x: x['long'] if x['side']>0 else (
+                                          x['short'] if x['side']<0 else 0
+                                          ), axis=1)
+    
     # if we've never had that many concurrent trades, size is 0.1
     events.reset_index(inplace=True)
     max_long = ((events['side']>0) & (events['long']==events['max_conc']))
     max_short = ((events['side']<0) & (events['short']==events['max_conc']))
-    events['size'] = events['size'].mask(max_long, 0.1)
-    events['size'] = events['size'].mask(max_short, 0.1)
+    events.loc[:,'size'] = events.loc[:,'size'].mask(max_long, 0.1)
+    events.loc[:,'size'] = events.loc[:,'size'].mask(max_short, 0.1)
+    
+    # if max_signals, drop consecutive trades after that number of signals
+    if max_signals is not None:
+        events = events[~((events['long']>max_signals) | (events['short']>max_signals))]
+    
     events.set_index('Date', inplace=True)
+    
     return events
 
 
