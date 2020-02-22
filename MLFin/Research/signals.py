@@ -155,7 +155,52 @@ def generate_exposures(events, close):
     
     return exposures
 
+
+def generate_pnl_index(mtm_pnl):
+    """
+    Generate strategy total return index from mtm_pnl
     
+    Effectively just treat is as carry and use ETFTrick.get_etf_series()
+    :param mtm_pnl: (pd.Series) $pnl series from generate_mtm_pnl function
+    """
+    df1 = pd.DataFrame(1, index=mtm_pnl.index, columns=['strat'])
+    
+    trick = ETFTrick(df1, df1, df1, mtm_pnl.rename('strat').to_frame())
+    index_pnl = trick.get_etf_series()
+    return index_pnl
+
+    
+def generate_perf_summary(events, close_tr):
+    """
+    Function to generate CAGR, vol, sharpe, calmar, max drawdown, # trades, avg pnl per trade, hit ratio
+    
+    :input events: (pd.DataFrame) 'events' dataframe with t1, side, size, trgt
+    :input close_tr: (pd.Series) total return series of underlying product
+    :return: (pd.DataFrame) summary of pnl attributes
+    """
+    pnl = generate_mtm_pnl(events, close_tr, log_diff=True)
+    pnl_index = generate_pnl_index(pnl)
+    last_date = min(np.hstack((events['t1'].iloc[-1],pnl_index.index[-1])))
+    years_live = (last_date-events.index[0]).days/365.25
+    cagr = np.power(pnl_index.iloc[-1]/pnl_index.iloc[0],1/years_live)-1.
+    
+    log_returns = pnl_index.apply(np.log).diff(1).dropna()
+    vol = log_returns.std()
+    # assumes daily close data
+    annualized_vol = vol*np.sqrt(252)
+    sharpe = cagr/annualized_vol
+    drawdown_pct = pnl_index.divide(pnl_index.expanding(0).max())-1.
+    max_dd = np.min(drawdown_pct)
+    calmar = cagr/max_dd
+    num_trades = events[abs(events['side'])>0].shape[0]
+    avg_pnl = pnl.mean()
+    hit_ratio = events[events['side']==1].shape[0]/num_trades
+    
+    summary = pd.Series([cagr,annualized_vol,sharpe,calmar, max_dd, num_trades, avg_pnl, hit_ratio], 
+                       index=['Ann. Ret.','Ann. Vol.','Sharpe','Calmar','Max Drawdown','# Trades','Avg. PnL', 'Hit Ratio'])
+    return summary
+
+
 if __name__=='__main__':
     # implement citi reversion
     # start with just AUDNZD
