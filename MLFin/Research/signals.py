@@ -191,7 +191,7 @@ def generate_perf_summary(events, close_tr):
     sharpe = cagr/annualized_vol
     drawdown_pct = pnl_index.divide(pnl_index.expanding(0).max())-1.
     max_dd = np.min(drawdown_pct)
-    calmar = cagr/max_dd
+    calmar = -cagr/max_dd
     num_trades = events[abs(events['side'])>0].shape[0]
     avg_pnl = pnl.mean()
     hit_ratio = events[events['side']==1].shape[0]/num_trades
