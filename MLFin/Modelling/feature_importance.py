@@ -15,6 +15,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from Preprocessing.labeling import resample_close
 from Research.fx_utils import fx_data_import
+from Modelling.cross_val import PurgedKFold
 
 
 def get_pca_weights(close, window, n_components=None, ret_pca=False):
@@ -115,6 +116,24 @@ def pca_cluster_loop(close, window, n_components, n_clusters, components_to_use=
         
     return cluster_ts
     
+
+def aux_feat_imp_sfi(features, clf, X, events, scoring, n_splits):
+    """
+    Compute single feature importance
+    """
+    if n_splits is None:
+        n_splits = int(X.shape[0]/5)
+    imp = pd.DataFrame(columns=['mean','std'])
+    p_kfold = PurgedKFold(n_splits=n_splits, t1=events['t1'], pct_embargo=0.01)
+    for name in features:
+        df0 = p_kfold.cv_score(clf, X=X.loc[:,name].to_frame(), y=events['bin'], 
+                               sample_weight=events['w'], scoring=scoring)
+        imp.loc[name, 'mean'] = df0.mean()
+        print(df0)
+        imp.loc[name, 'std'] = df0.std()*(df0.shape[0]**-0.5)
+    
+    return imp
+
 
 if __name__=='__main__':
     n_comp = 3

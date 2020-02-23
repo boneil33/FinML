@@ -93,7 +93,7 @@ def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(
     if max_signals is not None:
         events = events[~((events['long']>max_signals) | (events['short']>max_signals))]
     
-    events.set_index('Date', inplace=True)
+    events.set_index(close.index.name, inplace=True)
     
     return events
 

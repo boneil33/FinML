@@ -99,12 +99,28 @@ def get_events_avg_uniqueness(close, t1):
     return out
 
 
+def get_ind_mat(close_index, t1):
+    """
+    Get indicator matrix of live events per close index
+    
+    :param close: (pd.DateTimeIndex) close bar data
+    :param t1: (pd.DateTimeIndex) end stamps indexed by entries
+    :return: (np.ndarray) indicator matrix (close idx, events) of concurrency
+    """
+    c = np.array(close_index.values)
+    start = np.array(t1.index.values)
+    end = np.array(t1.values)
+    ind_mat = ((c[:, None]>=start) & (c[:, None]<=end))*1
+    
+    return ind_mat
+    
+    
 def get_ind_mat_label_uniqueness(ind_mat):
     """
     :param ind mat: (np.ndarray) indicator matrix (close idx, events) of cncrncy
     :return: (np.ndarray) matrix (events, close idx) of uniqueness
     """
-    concurrency = ind_mat.sum(axis=1) # total concurrent close stamps per event
+    concurrency = ind_mat.sum(axis=1) # total concurrent events per close stamp
     uniqueness = ind_mat.T / concurrency
     return uniqueness
 
@@ -164,5 +180,32 @@ def seq_bootstrap(ind_mat, sample_length=None, random_state=np.random.RandomStat
     return phi
 
 
+def get_sample_weight(t1, close):
+    """"
+    Generate event sample weights by associated returns and concurrency
+    
+    :param t1: (pd.Series) end stamps indexed by entries
+    :param close: (pd.Series) close bar data
+    :return: (pd.Series) event absolute returns inv weighted by per period concurrency
+    """
+    ret = np.array(np.log(close).diff(1).fillna(0).values) # nx1
+    ind_mat = get_ind_mat(close.index, t1) # n x m
+    num_conc_events = ind_mat.sum(axis=1) # live events per close index (nx1)
+    live_rets = ind_mat.transpose()*ret #live returns in rows per event (m x n)
+    
+    wgt = np.nansum(live_rets/num_conc_events[:, None].T, axis=1) # mx1
+    
+    #wgt[np.isnan(wgt)] = 0
+    wgt*= wgt.shape/np.nansum(wgt)
+    
+    wgt = pd.Series(abs(wgt), index=t1.index, name='w')
+    
+    return wgt
+    
+    
 if __name__=='__main__':
-    events = pd.DataFrame([0])
+    c = pd.Series([1,2,3])
+    e = pd.Series([1,1])
+    ind = get_ind_mat(c, e)
+    w = get_sample_weight(e,c)
+    print(ind)
