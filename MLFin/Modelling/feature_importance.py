@@ -16,6 +16,7 @@ from sklearn.cluster import KMeans
 from Preprocessing.labeling import resample_close
 from Research.fx_utils import fx_data_import
 from Modelling.cross_val import PurgedKFold
+from sklearn.metrics import log_loss, accuracy_score
 
 
 def get_pca_weights(close, window, n_components=None, ret_pca=False):
@@ -117,23 +118,65 @@ def pca_cluster_loop(close, window, n_components, n_clusters, components_to_use=
     return cluster_ts
     
 
-def aux_feat_imp_sfi(features, clf, X, events, scoring, n_splits):
+def aux_feat_imp_sfi(features, clf, X, events, scoring='neg_log_loss', n_splits=5, pct_embargo=0.01):
     """
     Compute single feature importance
     """
-    if n_splits is None:
-        n_splits = int(X.shape[0]/5)
     imp = pd.DataFrame(columns=['mean','std'])
     p_kfold = PurgedKFold(n_splits=n_splits, t1=events['t1'], pct_embargo=0.01)
     for name in features:
         df0 = p_kfold.cv_score(clf, X=X.loc[:,name].to_frame(), y=events['bin'], 
                                sample_weight=events['w'], scoring=scoring)
         imp.loc[name, 'mean'] = df0.mean()
-        print(df0)
         imp.loc[name, 'std'] = df0.std()*(df0.shape[0]**-0.5)
     
     return imp
 
+
+def feat_imp_mda(clf, X, events, scoring='neg_log_loss', n_splits=5, pct_embargo=0.01):
+    """
+    Compute mean decrease accuracy (OoS)
+    """
+    if scoring not in ['neg_log_loss','accuracy']:
+        raise ValueError('only implemented for neg_log_loss and accuracy, got: ', scoring)
+    y = events['bin']
+    p_kfold = PurgedKFold(n_splits=n_splits, t1=events['t1'], pct_embargo=0.01)
+    score0 = pd.Series()
+    score1 = pd.DataFrame(columns=X.columns)
+    for i, (train,test) in enumerate(p_kfold.split(X=X)):
+        x0,y0,w0 = X.iloc[train,:], y.iloc[train], events['w'].iloc[train]
+        x1,y1,w1 = X.iloc[test,:], y.iloc[test], events['w'].iloc[test]
+        fit = clf.fit(X=x0, y=y0, sample_weight=w0.values)
+        if scoring=='neg_log_loss':
+            prob = fit.predict_proba(x1)
+            score0.loc[i] = -log_loss(y1, prob, sample_weight=w1.values,
+                                      labels=clf.classes_)
+        else:
+            pred = fit.predict(x1)
+            score0.loc[i] = accuracy_score(y1, pred, sample_weight=w1.values)
+        
+        # permute data and refit
+        for col in X.columns:
+            x1_ = x1.copy(deep=True)
+            np.random.shuffle(x1_[col].values)
+            if scoring=='neg_log_loss':
+                prob = fit.predict_proba(x1_)
+                score1.loc[i, col] = -log_loss(y1, prob, sample_weight=w1.values,
+                                             labels=clf.classes_)
+            else:
+                pred = fit.predict(x1_)
+                score1.loc[i, col] = accuracy_score(y1, pred, sample_weight=w1.values)
+        
+    # compare permuted data fit to 'true' fit for each feature
+    imp = (-score1).add(score0, axis=0)
+    if scoring=='neg_log_loss':
+        imp = imp/-score1
+    else:
+        imp = imp/(1.-score1)
+    
+    imp = pd.DataFrame({'mean':imp.mean(), 'std':imp.std()*imp.shape[0]**-0.5})
+    return imp, score0.mean()
+    
 
 if __name__=='__main__':
     n_comp = 3
