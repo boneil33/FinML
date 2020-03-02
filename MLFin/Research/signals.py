@@ -46,10 +46,22 @@ def zscore_signal(zscores, threshold, signal_type='Reversion'):
     return signals
 
 
+def get_sizes(events, discrete_width, prob, pred=None, num_classes=2):
+    """
+        Determine bet sizes from predicted probabilities
+    
+    :param events: 'events' dataframe with t1, side, size, trgt
+    :param discrete_width: (float) fraction for discretization of bet sizes
+    :param prob: (pd.Series) predicted probability of each event
+    :param pred: (pd.Series) predicted label of each event
+    :param num_classes: (int) number of potential labels
+    :return: (pd.Series) bet sizes for each event in [-1.0, 1.0]
+    """
 def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(1,1), 
                   trgt=None, model_resids=None, max_signals=None, even_weight=False):
     """
-    Generate events dataframe with sizes
+        Generate events dataframe with sizes. 
+        Size is the trade size, each signal being a different trade.
     
     :param signals: (pd.Series) single security buy/sell signals
     :param close: (pd.Series) single security close prices

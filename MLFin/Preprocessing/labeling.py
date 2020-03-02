@@ -178,7 +178,7 @@ def get_bins(events, close):
     df0 = _get_barrier_touched(df0, events)
     
     if 'side' in events.columns:
-        df0.loc[df0['ret'] <= 0,'bin'] = 0
+        df0.loc[df0['ret'] <= 0, 'bin'] = 0
         df0['side'] = events_['side']
     #back to arithmetic returns
     df0['ret'] = np.exp(df0['ret'])-1

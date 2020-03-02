@@ -1,0 +1,47 @@
+
+
+- Generate clusters/classifications:
+    - rolling PCA on standardized vs. USD returns
+    - k-means clusters on PCA weights and rolling return correlations
+    - look at clusters data
+    
+- conclusions so far:
+    - kmeans clusters aren't continuous, this is problematic:
+        - e.g. AUD and NZD can both be in cluster 0, then a slight move could cause AUD to move to 4,
+            there is no distinction between 4 and 3 in terms of similarity to 0, it's just a different cluster
+        - should use a continuous classifier like pairwise distances in the PC weights space
+        - the paper averages trailing 12m clusters generated monthly
+        - so we're gonna use distances < threshold as our clustering mechanism
+
+- Within clusters, generate MR signals:
+    - z-score thresholds on rolling 30d returns -> buy-sell signals
+    - apply to MLdP framework
+        
+        We have signals now on usd pairs-- not the goal
+        TODO:
+        1. Form "in-cluster" combinatoric pairs
+        2. Generate pair zscore timeseries 
+        3. generate MLdP events DF
+        4. Size trades based on inverse concurrency
+            a. maybe instead of first bet = 1, second = 1/2...
+            b. we could do 1 / W_{t,s}, where W_{t,s} = max concurrency up to t
+                for side s (long/short)
+            c. this would have the effect of scaling into bets rather than
+                frontloading them
+        5. Generate pnl from sized signals
+        6. FEATURE IMPORTANCE
+
+
+LATEST:
+
+a. Revisit bet sizing
+  1) Fit decision tree-base bagging classifier using macro data set and PCs from
+      mean reversion fit
+  2) Use classifier to predict probabilities
+  3) Use probabilities to generate bet sizes
+
+b. Start thinking about fitting a bagging classifier using all of the pairs
+  1) Concat all of the events frames into one big one
+  2) Redefine the weighting mechanism as the average uniqueness across all pairs
+  3) Look at feature importances
+  4) Use classifier to predict probabilities -> bet sizes 
