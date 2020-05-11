@@ -145,7 +145,7 @@ class ETFTrick():
                 # previous h is needed to calculate current value of ETF
                 self.prev_h = row['holdings']*self.prev_k
                 # K = 1 to start!
-                etf_series[index] = self.prev_k
+                etf_series.loc[index] = self.prev_k
             else:
                 # if rebalanced, holdings need to include pnl
                 # otherwise, just equal to previous

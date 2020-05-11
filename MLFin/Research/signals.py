@@ -15,19 +15,25 @@ from Preprocessing.sampling import get_num_conc_events_side, get_max_concurrency
 from Preprocessing.etf_trick import ETFTrick
 
 
-def lookback_zscore(close, lookback, vol_lookback):
+def lookback_zscore(close, lookback, vol_lookback, log_ret=True, center=True):
     """
     Generate lookback-period return zscores
     
     :param close: (pd.DataFrame) close prices
     :param lookback: (int) periods to look back
+    :param vol_lookback: (int) rolling window size
     :return: (pd.DataFrame) rolling lookback zscores
     """
-    rets = close.apply(np.log).diff(lookback).dropna()
-    rets_centered = rets.subtract(rets.rolling(vol_lookback).mean())
-    vols = rets.rolling(vol_lookback).std()
+    if log_ret:
+        close = close.apply(np.log)
+
+    rets = close.diff(lookback).dropna()
     
-    std_rets = rets_centered.divide(vols)
+    if center:
+        rets = rets.subtract(rets.rolling(vol_lookback).mean())
+
+    vols = rets.rolling(vol_lookback).std()    
+    std_rets = rets.divide(vols)
     return std_rets
     
 
@@ -110,7 +116,7 @@ def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(
     return events
 
 
-def generate_pnl(events, close_tr):
+def generate_pnl(events, close_tr, pct_pnl=True):
     """
     Generate pnl series from events. Assumes close_tr and close used to 
         generate events df have same index
@@ -143,6 +149,8 @@ def generate_mtm_pnl(events, close_tr, log_diff=True):
     events.loc[:, 't1'] = events.loc[:, 't1'].fillna(close_tr.index[-1])
     if 'size' not in events.columns:
         events['size'] = 1.
+    if 'trgt' not in events.columns:
+        events['trgt'] = 1.
     if log_diff:
         close = close.apply(np.log)
     close_diff = close.diff(1).fillna(0)
@@ -172,7 +180,7 @@ def generate_pnl_index(mtm_pnl):
     """
     Generate strategy total return index from mtm_pnl
     
-    Effectively just treat is as carry and use ETFTrick.get_etf_series()
+    Effectively just treat it as carry and use ETFTrick.get_etf_series()
     :param mtm_pnl: (pd.Series) $pnl series from generate_mtm_pnl function
     """
     df1 = pd.DataFrame(1, index=mtm_pnl.index, columns=['strat'])

@@ -26,7 +26,7 @@ def get_lookback_vol(close, lookback, volwindow=100, ewma=True):
 
 def get_t1(s, close, vertbar=30):
     """
-    :param s: (pd.datetimeindex) entry signal dates index
+    :param s: (pd.int64index,pd.datetimeindex) entry signal dates index
     :param close: (pd.Series) close prices
     :param vertbar: (int) vertical bar distance from t0
     :return: (pd.Series) timeouts
@@ -35,7 +35,10 @@ def get_t1(s, close, vertbar=30):
         s = s.index
         
     #closes vertbar bars from index
-    t1 = close.index.searchsorted(s+pd.Timedelta(days=vertbar))
+    if isinstance(s, pd.core.indexes.numeric.Int64Index):
+        t1 = close.index.searchsorted(s+vertbar)
+    else:
+        t1 = close.index.searchsorted(s+pd.Timedelta(days=vertbar))
     t1 = t1[t1<close.shape[0]]
     t1 = pd.Series(close.index[t1], index=s[:t1.shape[0]]).dropna()
     return t1
