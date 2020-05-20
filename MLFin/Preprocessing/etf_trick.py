@@ -2,7 +2,8 @@
 """
 Created on Sat Jan 18 07:23:51 2020
 
-@author: Brendan
+@author: Hudson-and-Thames/mlfinlab
+very lightly adjusted by Brendan
 """
 
 import pandas as pd
