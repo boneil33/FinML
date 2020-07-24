@@ -30,6 +30,8 @@ class ETFTrick():
         :param rates_df: (pd.DataFrame) of dollar value of one point in 
             the underlying contract, includes fx and futures multipliers
         :param rebal_freq: (string) rebalance frequency if weights don't change
+            this makes it such that losers are cut and winners are added to,
+            a stock price won't be replicated by this even if carry = 0
         """
         
         # if last index we rebalance then price change will be open to close
@@ -99,7 +101,7 @@ class ETFTrick():
         
         # get indices at which you force rebal
         data_index = self.data_dict['open'].index
-        rebal_index = self.data_dict['open'].asfreq(self.rebal_freq).dropna(how='any').index
+        rebal_index = self.data_dict['open'].asfreq(self.rebal_freq).index
         reset_index = [idx in rebal_index for idx in data_index]
         reset_df = pd.Series(reset_index, index=data_index, name='force_rebal')
         
