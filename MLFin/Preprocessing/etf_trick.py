@@ -99,7 +99,7 @@ class ETFTrick():
         
         # get indices at which you force rebal
         data_index = self.data_dict['open'].index
-        rebal_index = self.data_dict['open'].asfreq(self.rebal_freq).index
+        rebal_index = self.data_dict['open'].asfreq(self.rebal_freq).dropna(how='any').index
         reset_index = [idx in rebal_index for idx in data_index]
         reset_df = pd.Series(reset_index, index=data_index, name='force_rebal')
         
