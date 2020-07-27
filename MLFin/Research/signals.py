@@ -101,6 +101,12 @@ def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(
                                           ), axis=1)
     
     # if we've never had that many concurrent trades, size is 0.1
+    # handle unnamed index
+    if events.index.name is not None:
+        events_index_name = events.index.name
+    else:
+        events.index.name = 'Date'
+        events_index_name = 'Date'
     events.reset_index(inplace=True)
     max_long = ((events['side']>0) & (events['long']==events['max_conc']))
     max_short = ((events['side']<0) & (events['short']==events['max_conc']))
@@ -111,7 +117,7 @@ def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(
     if max_signals is not None:
         events = events[~((events['long']>max_signals) | (events['short']>max_signals))]
     
-    events.set_index(close.index.name, inplace=True)
+    events.set_index(events_index_name, inplace=True)
     
     return events
 
