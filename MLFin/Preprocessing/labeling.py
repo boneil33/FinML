@@ -35,7 +35,7 @@ def get_t1(s, close, vertbar=30):
         s = s.index
         
     #closes vertbar bars from index
-    if isinstance(s, pd.core.indexes.numeric.Int64Index):
+    if not isinstance(s, pd.core.indexes.datetimes.DatetimeIndex):
         t1 = close.index.searchsorted(s+vertbar)
     else:
         t1 = close.index.searchsorted(s+pd.Timedelta(days=vertbar))
