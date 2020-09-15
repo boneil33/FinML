@@ -122,31 +122,34 @@ def zscore_sizing(signals, close, vertbar, lookback=1, vol_lookback=100, pt_sl=(
     return events
 
 
-def generate_pnl(events, close_tr, pct_pnl=True):
+def generate_pnl(events, close_tr, pct_change=True):
     """
     Generate pnl series from events. Assumes close_tr and close used to 
         generate events df have same index
     
     Alternatively I should use total return index throughout this module
-    
+        
     :param events: 'events' dataframe with t1, side, size, trgt
     :param close_tr: (pd.Series) single security total return index
-    :return: (pd.Series) strategy pnl series
+    :return: (pd.Series) strategy pnl series, inversely scaled by the trailing vol
     """
-    
-    events['ret'] = close_tr.loc[events['t1']].values/close_tr.loc[events.index].values-1.
+    if pct_change:
+        events['ret'] = close_tr.loc[events['t1']].values/close_tr.loc[events.index].values-1.
+    else:
+        events['ret'] = close_tr.loc[events['t1']].values-close_tr.loc[events.index].values
     events['ret']*= events['side']*events['size']/events['trgt']
     
     return events
     
 
-def generate_mtm_pnl(events, close_tr, log_diff=True):
+def generate_mtm_pnl(events, close_tr, log_diff=True, tc=0.0):
     """
     Generate daily mark to market pnl from events.
-    todo: paralellize this to test yourself!
+    todo: paralellize this!
     
     :param events: 'events' dataframe with t1, side, size, trgt
     :param close_tr: (pd.Series) single security total return index
+    :param tc: (float) transaction cost in return units, e.g. 1bp = 1e-4
     :return: (pd.Series) mark to market pnl per index on close_tr
     """
     events = events.copy(deep=True)
@@ -160,9 +163,11 @@ def generate_mtm_pnl(events, close_tr, log_diff=True):
     if log_diff:
         close = close.apply(np.log)
     close_diff = close.diff(1).fillna(0)
-    pnl_df = pd.Series(0, index=close_tr.index)
+    pnl_df = pd.Series(0, index=close_tr.index, name='strat')
     for row in events.itertuples():
-        pnl_df.loc[row.Index:row.t1] += close_diff.loc[row.Index:row.t1]*row.side*row.size*row.trgt
+        pnl_df.loc[row.Index:row.t1] += close_diff.loc[row.Index:row.t1]*row.side*row.size#*row.trgt
+        pnl_df.loc[row.Index] = -tc # we open position at the close, should be no pnl
+        pnl_df.loc[row.t1] += -tc
     
     #re-exponentiate
     if log_diff:
@@ -174,29 +179,36 @@ def generate_mtm_pnl(events, close_tr, log_diff=True):
 def generate_exposures(events, close):
     """
     Generate exposure per day
+        exposure is measured at the open
     """
     exposures = pd.Series(0, index=close.index)
     for row in events.itertuples():
         exposures.loc[row.Index:row.t1] += row.side*row.size
+        exposures.loc[row.Index] = 0
     
     return exposures
 
 
-def generate_pnl_index(mtm_pnl):
+def generate_pnl_index(mtm_pnl, rebal_cost=None):
     """
     Generate strategy total return index from mtm_pnl
     
     Effectively just treat it as carry and use ETFTrick.get_etf_series()
     :param mtm_pnl: (pd.Series) $pnl series from generate_mtm_pnl function
+    :param rebal_cost: (pd.Series) $daily cost of rebalancing
     """
     df1 = pd.DataFrame(1, index=mtm_pnl.index, columns=['strat'])
     
-    trick = ETFTrick(df1, df1, df1, mtm_pnl.rename('strat').to_frame())
+    carry_of_strat = mtm_pnl.rename('strat').to_frame()
+    if rebal_cost is not None:
+        carry_of_strat = (mtm_pnl.add(rebal_cost)).rename('strat').to_frame()
+    
+    trick = ETFTrick(df1.shift(1), df1, df1, carry_of_strat)
     index_pnl = trick.get_etf_series()
     return index_pnl
 
     
-def generate_perf_summary(events, close_tr):
+def generate_perf_summary(events, close_tr, tc_pct=0.0, rebal_cost=None):
     """
     Function to generate CAGR, vol, sharpe, calmar, max drawdown, # trades, avg pnl per trade, hit ratio
     
@@ -204,8 +216,12 @@ def generate_perf_summary(events, close_tr):
     :input close_tr: (pd.Series) total return series of underlying product
     :return: (pd.DataFrame) summary of pnl attributes
     """
-    pnl = generate_mtm_pnl(events, close_tr, log_diff=True)
-    pnl_index = generate_pnl_index(pnl)
+    pnl = generate_mtm_pnl(events, close_tr, log_diff=True, tc=tc_pct)
+    if rebal_cost is not None: 
+        pnl_index = generate_pnl_index(pnl, rebal_cost)
+    else:
+        pnl_index = generate_pnl_index(pnl)
+        
     last_date = min(np.hstack((events['t1'].iloc[-1],pnl_index.index[-1])))
     years_live = (last_date-events.index[0]).days/365.25
     cagr = np.power(pnl_index.iloc[-1]/pnl_index.iloc[0],1/years_live)-1.
@@ -219,12 +235,73 @@ def generate_perf_summary(events, close_tr):
     max_dd = np.min(drawdown_pct)
     calmar = -cagr/max_dd
     num_trades = events[abs(events['side'])>0].shape[0]
-    avg_pnl = pnl.mean()
-    hit_ratio = events[events['side']==1].shape[0]/num_trades
     
-    summary = pd.Series([cagr,annualized_vol,sharpe,calmar, max_dd, num_trades, avg_pnl, hit_ratio], 
-                       index=['Ann. Ret.','Ann. Vol.','Sharpe','Calmar','Max Drawdown','# Trades','Avg. PnL', 'Hit Ratio'])
+    # update ret for at least execution tc, 2x in and out
+    events.loc[:, 'ret'] -= 2*tc_pct*events.loc[:, 'size']/events.loc[:, 'trgt']
+    avg_pnl = events['ret'].mean()
+    long_ratio = events[events['side']==1].shape[0]/num_trades
+    hit_ratio = events[events['ret']>0].shape[0]/num_trades
+    avg_trade_days = (events['t1']-events.index).mean()
+    
+    summary = pd.Series([cagr,annualized_vol,sharpe,calmar, max_dd, num_trades, avg_pnl, 
+                         long_ratio, hit_ratio, avg_trade_days], 
+                       index=['Ann. Ret.','Ann. Vol.','Sharpe','Calmar','Max Drawdown','# Trades',
+                              'Avg. PnL', 'Long%Signals', 'Hit Ratio', 'Avg. Trade Days'])
     return summary
+
+
+def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_lookback, entry_threshold, pt_sl, vertbar,
+                       max_signals=1, even_weight=True, log_ret=False, rebal_freq=None, plot=True, tc_pct=0.0):
+    """
+        Run a backtest based on residual reversion. Plot the resulting positions and MTM pnl, and show the stats summary
+    :param resids: (pd.Series) of residuals
+    :param resid_lookback_diff: (int) trading days to compute difference to generate zscore signals
+    :param vol_lookback: (int) trading days to compute lookback vol for zscore signals
+    :param entry_threshold: (float) zscore entry
+    :param rebal_freq: (pandas date freq or None) how often to rebalance portfolio outside of weight changes
+        in other words, how often pnl is reinvested
+    """
+    # generate ETF synthetic series
+
+    tr = ETFTrick(closes.shift(1), closes, weights, carry, rebal_freq=rebal_freq)
+    trs, etf_inter_data = tr.get_etf_series(return_data=True)
+    
+    # need to reindex the residuals to days where my trs are defined (i.e. drop NaN days)
+    resids = resids.reindex(trs.index)
+
+    # rolling change zscores of the aggregated residuals
+    # TODO: maybe we should consider change versus a moving average rather than a specific lookback?
+    zscore_resids = lookback_zscore(resids, lookback=resid_lookback_diff, vol_lookback=vol_lookback, log_ret=log_ret)
+    
+    # generating over threshold .75 z-score signals for reversion
+    signals = zscore_signal(zscore_resids, threshold=entry_threshold, signal_type='Reversion')
+
+    # generate initial events DataFrame for this reversion strategy
+    events0, df0 = zscore_sizing(signals, trs, vertbar=vertbar, pt_sl=pt_sl, 
+                                 max_signals=max_signals, even_weight=even_weight, model_resids=zscore_resids)
+    events = generate_pnl(events0, trs, pct_change=True)
+    
+    # tc cost on $1 (i.e. 1bp = 1e-4)
+    rebal_cost_srs = -tc_pct*etf_inter_data['weights_diff_delev']
+    
+    mtm_pnl = generate_mtm_pnl(events, trs, tc_pct) # subtract tc from return on open and close
+    rebal_cost_srs = rebal_cost_srs.squeeze().reindex(mtm_pnl.index, fill_value=0.0).rename('strat')
+    
+    pnl_index = generate_pnl_index(mtm_pnl, rebal_cost_srs)
+    exposures = generate_exposures(events, trs)
+    if plot:
+        fig, ax = plt.subplots(figsize=(6,6), nrows=3, dpi=300)
+        exposures.plot(ax=ax[0])
+        pnl_index.plot(ax=ax[1])
+        trs.plot(ax=ax[2])
+        ax[0].set_title("Exposure in long USDCAD vs Basket")
+        ax[1].set_title(r"Daily MTM PnL ({0}bp TC)".format(int(tc_pct*1e4)))
+        fig.tight_layout()
+        plt.show()
+    perf_summary = generate_perf_summary(events, trs, tc_pct=tc_pct, rebal_cost=rebal_cost_srs)
+    
+    return events, df0, pnl_index, exposures, trs, perf_summary
+
 
 
 if __name__=='__main__':
