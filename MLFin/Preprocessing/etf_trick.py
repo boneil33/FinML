@@ -30,9 +30,6 @@ class ETFTrick():
         :param rates_df: (pd.DataFrame) of dollar value of one point in 
             the underlying contract, includes fx and futures multipliers
         :param rebal_freq: (string) rebalance frequency if weights don't change
-            this makes it such that losers are cut and winners are added to,
-            a stock price won't be replicated by this even if carry = 0. to replicate
-            this behavior set rebal_freq=None
         """
         
         # if last index we rebalance then price change will be open to close
@@ -103,7 +100,7 @@ class ETFTrick():
         # get indices at which you force rebal
         data_index = self.data_dict['open'].index
         if self.rebal_freq is not None:
-            rebal_index = self.data_dict['open'].asfreq(self.rebal_freq).index
+            rebal_index = self.data_dict['open'].asfreq(self.rebal_freq).dropna(how='any').index
         else:
             rebal_index = []
         reset_index = [idx in rebal_index for idx in data_index]
@@ -112,18 +109,23 @@ class ETFTrick():
         # get holdings vector without pnl
         h_without_k = delever.divide(next_open_dollar)
         weights = self.data_dict['alloc'][self.securities]
+        
+        # compute abs change in weights (per $ total ETF) for transaction cost analysis
+        weights_diff_delev = weights.diff(1).fillna(0).divide(self.data_dict['alloc']['abs_w_sum'], 
+                                                              axis=0).abs().sum(axis=1)
+        
         h_without_k = h_without_k[self.securities]
         close_open = close_open[self.securities]
         close_diff = close_diff[self.securities]
         
         # everything together
-        final = pd.concat([weights, h_without_k, close_open, close_diff,
+        final = pd.concat([weights, weights_diff_delev, h_without_k, close_open, close_diff,
                            self.data_dict['carry'], self.data_dict['rates'],
                            reset_df], axis=1,
-                           keys=['weights','holdings','close_open',
+                           keys=['weights', 'weights_diff_delev', 'holdings','close_open',
                                  'close_diff','carry','rates','force_rebal'])
         if output:
-            final.to_excel('C:/Users/Brendan/MLFin/Research/output_components.xlsx')
+            final.to_excel('/home/boneil/data/trs_output_components.xlsx')
         return final
     
     
@@ -171,15 +173,17 @@ class ETFTrick():
         return etf_series
      
                 
-    def get_etf_series(self):
+    def get_etf_series(self, output_inter=False, return_data=False):
         """
         External method to retrieve ETF series
         :return: (pd.Series) time series of synthetic ETF values
         """
-        data = self._generate_trick_components(output=False)
+        data = self._generate_trick_components(output=output_inter)
         
         # delete first row that will have NaNs from price diffs
-        data = data
+        #data = data
         etf = self._chunk_loop(data)
+        if return_data:
+            return etf, data
         return etf
     
