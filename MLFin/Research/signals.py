@@ -207,7 +207,35 @@ def generate_pnl_index(mtm_pnl, rebal_cost=None):
     index_pnl = trick.get_etf_series()
     return index_pnl
 
+
+def _get_tc(events, tc_pct, rebal_cost):
+    """
+        Compute rebal costs:
+        1. apply to events['ret']
+        2. compute the 'live' rebal costs, i.e. the rebalances that occur as a trade is live
+            - multiply costs by live sizes
     
+    :param events: (pd.DataFrame) final events with ret and size column
+    :param rebal_cost: (pd.Series) rebalance costs of $1 etf over life of etf
+    :return: events with updated ret, rebal_cost updated series
+    """
+    ret_events = events.copy(deep=True)
+    rebal_cost = rebal_cost.rename('cost')
+    ret_cost = rebal_cost.copy(deep=True).to_frame()
+    ret_cost['abs_size'] = 0.0
+    for row in events.itertuples():
+        # apply cost to ret_events, in inv vol scaled terms (since that is scale of ret)
+        ret_events.loc[row.Index, 'ret'] += ( rebal_cost.loc[row.Index:row.t1].sum() - 
+                                             2.*tc_pct )*row.size/row.trgt
+                                                
+        
+        # compute 'live' rebal costs, in $1 terms, inclusive of trade dates to be conservative
+        ret_cost.loc[row.Index:row.t1, 'abs_size'] += row.size
+    
+    ret_cost['strat_cost'] = ret_cost['abs_size']*ret_cost['cost'] 
+    return ret_events, ret_cost['strat_cost']
+
+
 def generate_perf_summary(events, close_tr, tc_pct=0.0, rebal_cost=None):
     """
     Function to generate CAGR, vol, sharpe, calmar, max drawdown, # trades, avg pnl per trade, hit ratio
@@ -236,8 +264,9 @@ def generate_perf_summary(events, close_tr, tc_pct=0.0, rebal_cost=None):
     calmar = -cagr/max_dd
     num_trades = events[abs(events['side'])>0].shape[0]
     
-    # update ret for at least execution tc, 2x in and out
-    events.loc[:, 'ret'] -= 2*tc_pct*events.loc[:, 'size']/events.loc[:, 'trgt']
+    # update ret for at least execution tc, 2x in and out 
+    # already done
+    #events.loc[:, 'ret'] -= 2*tc_pct*events.loc[:, 'size']/events.loc[:, 'trgt']
     avg_pnl = events['ret'].mean()
     long_ratio = events[events['side']==1].shape[0]/num_trades
     hit_ratio = events[events['ret']>0].shape[0]/num_trades
@@ -248,8 +277,8 @@ def generate_perf_summary(events, close_tr, tc_pct=0.0, rebal_cost=None):
                        index=['Ann. Ret.','Ann. Vol.','Sharpe','Calmar','Max Drawdown','# Trades',
                               'Avg. PnL', 'Long%Signals', 'Hit Ratio', 'Avg. Trade Days'])
     return summary
-
-
+   
+    
 def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_lookback, entry_threshold, pt_sl, vertbar,
                        max_signals=1, even_weight=True, log_ret=False, rebal_freq=None, plot=True, tc_pct=0.0):
     """
@@ -281,13 +310,14 @@ def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_
                                  max_signals=max_signals, even_weight=even_weight, model_resids=zscore_resids)
     events = generate_pnl(events0, trs, pct_change=True)
     
-    # tc cost on $1 (i.e. 1bp = 1e-4)
-    rebal_cost_srs = -tc_pct*etf_inter_data['weights_diff_delev']
+    # tc cost on $1 (i.e. 1bp = 1e-4), weights_diff_delev is absolute change in weights
+    rebal_cost_srs = -tc_pct*etf_inter_data['weights_diff_delev'].squeeze()
+    events, rebal_cost_strat = _get_tc(events, tc_pct, rebal_cost_srs)
     
-    mtm_pnl = generate_mtm_pnl(events, trs, tc_pct) # subtract tc from return on open and close
-    rebal_cost_srs = rebal_cost_srs.squeeze().reindex(mtm_pnl.index, fill_value=0.0).rename('strat')
+    mtm_pnl = generate_mtm_pnl(events, trs, tc_pct) # subtract tc from return on open and close, doesn't use ret
+    rebal_cost_strat = rebal_cost_strat.reindex(mtm_pnl.index, fill_value=0.0).rename('strat')
     
-    pnl_index = generate_pnl_index(mtm_pnl, rebal_cost_srs)
+    pnl_index = generate_pnl_index(mtm_pnl, rebal_cost_strat)
     exposures = generate_exposures(events, trs)
     if plot:
         fig, ax = plt.subplots(figsize=(6,6), nrows=3, dpi=300)
@@ -298,7 +328,7 @@ def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_
         ax[1].set_title(r"Daily MTM PnL ({0}bp TC)".format(int(tc_pct*1e4)))
         fig.tight_layout()
         plt.show()
-    perf_summary = generate_perf_summary(events, trs, tc_pct=tc_pct, rebal_cost=rebal_cost_srs)
+    perf_summary = generate_perf_summary(events, trs, tc_pct=tc_pct, rebal_cost=rebal_cost_strat)
     
     return events, df0, pnl_index, exposures, trs, perf_summary
 
