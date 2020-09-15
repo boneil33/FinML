@@ -73,9 +73,10 @@ def _apply_pt_sl(events, close, pt_sl=(1,1)):
 def _apply_pt_sl_vs_model(events, close, model_resids, pt_sl=(1,1)):
     """
     Applies tp/sl based on model residual zscores, pt_sl in terms of zscore
-    
-    e.g. pt = 0.25, sl = 2.0, signal generated at -1.0 (not provided)
-        we would stop out at side*2.0 (-2) and tp at at 0.25*side (-0.25)
+        positive numbers are on the same side of 0 as the zscore
+        thus negative values are more aggressive for take profit
+    e.g. pt = 0.25, sl = 2.0, long signal generated at -1.0 (not provided)
+        we would stop out at -side*2.0 (-2) and tp at at 0.25*-side (0.25)
     :param events: (pd.DataFrame) index=entry, t1=timeouts, trgt=trailing vol
         signal, side=trade side
     :param close: (pd.Series) close prices
@@ -89,14 +90,19 @@ def _apply_pt_sl_vs_model(events, close, model_resids, pt_sl=(1,1)):
     out = events['t1'].copy(deep=True).to_frame()
     out['tp'] = pd.NaT
     out['sl'] = pd.NaT
-    tp = pt_sl[0]*events['side']
-    sl = pt_sl[1]*events['side']
+    tp = pt_sl[0]
+    sl = pt_sl[1]
     
     for loc, t1 in events['t1'].fillna(close.index[-1]).iteritems():
         # residuals at each point from loc:t1
         df0 = model_resids.loc[loc:t1]
-        out.loc[loc, 'tp'] = df0[abs(df0)<abs(tp.loc[loc])].index.min() # earliest tp
-        out.loc[loc, 'sl'] = df0[abs(df0)>abs(sl.loc[loc])].index.min()
+        if events.loc[loc, 'side']==1:
+            out.loc[loc, 'tp'] = df0[df0>-tp].index.min() # earliest tp
+            out.loc[loc, 'sl'] = df0[df0<-sl].index.min()
+        else:
+            out.loc[loc, 'tp'] = df0[df0<tp].index.min() # earliest less than thresh
+            out.loc[loc, 'sl'] = df0[df0>sl].index.min() # earliest greater than
+    
     return out
     
     
