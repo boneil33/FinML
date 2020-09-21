@@ -1,16 +1,60 @@
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import datetime
-import matplotlib.pyplot as plt
-import statsmodels.tsa as tsa
-import statsmodels.tsa.vector_ar.vecm as vecm
-import statsmodels.api as sm
-from statsmodels.multivariate.pca import PCA
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.linear_model import Lasso, Ridge, LassoCV, RidgeCV
-from FinML.Utilities import _embargo_ts_splitter, adfuller_tester, _apply_ewma
+def adfuller_tester(input_df, maxlag=1):
+    """ return p-values for unit-root null hypothesis test"""
+    tstats = []
+    pvals = []
+    
+    for name, vals in input_df.iteritems():
+        adf = tsa.stattools.adfuller(vals.dropna(), maxlag=maxlag)
+        tstats.append(adf[0])
+        pvals.append("{:.3f}".format(adf[1]))
+    
+    
+    results = pd.DataFrame(np.vstack([tstats,pvals]).T,index=input_df.columns, columns=['tstat','pvals'])
+    
+    return results
 
+
+def _embargo_ts_splitter(data, test_size, max_train_size=None, embargo=0):
+    """
+    Scikit-learn time series split with holdout indices
+    """
+    n_samples = data.shape[0]
+    test_embargo_size = test_size+embargo
+    n_splits = n_samples//test_embargo_size
+    #n_folds = n_splits
+    
+    
+    indices = np.arange(n_samples)
+    if n_splits > n_samples:
+            raise ValueError(("Cannot have number of folds ={0} greater"
+                                 " than the number of samples: {1}.").format(n_folds, n_samples))
+    
+    test_starts = range(test_embargo_size + n_samples % n_splits, n_samples, test_embargo_size)
+    for test_start in test_starts:
+        embargo_start = test_start-embargo
+        if max_train_size and max_train_size < test_start:
+            yield (indices[embargo_start-max_train_size:embargo_start], indices[embargo_start:embargo_start+embargo],
+                   indices[test_start:test_start+test_size])
+        else:
+            yield (indices[:embargo_start], indices[embargo_start:embargo_start+embargo], 
+                   indices[test_start:test_start+test_size])
+
+    
+def _apply_ewma(data, span):
+    """ Apply exponentially weights on data to return transformed decayed info
+    these are weights
+    alpha = 2./(span+1.)
+    alpha_rev = 1-alpha
+    n = data.shape[0]
+    r = np.arange(n)
+    
+    wgts = alpha_rev**r
+    wgts = wgts[::-1]
+    
+    weighted = data.multiply(wgts, axis=0)
+    return weighted
+    """
+    return data.ewm(span=span).mean()
 
 def _build_vec_model(data, deterministic='ci', k_ar_diff=1, display=False):
     
@@ -24,13 +68,13 @@ def _build_vec_model(data, deterministic='ci', k_ar_diff=1, display=False):
 
 def _check_vec_model(mod, alpha_test=0.05, verbose=False):
     """ Check if model is well specified, i.e. coint rank = 1 and alpha significant at alpha_test"""
-    if mod.alpha[0] < 0:
+    if mod.alpha[0] > 0:
         if verbose:
             print("Coint rank:", mod.coint_rank)
             print("alpha_0 is positive")
         return False
     
-    hl = np.log(-2/mod.alpha[0])
+    hl = np.log(2)/-mod.alpha[0]
     if verbose:
         print("Coint rank:", mod.coint_rank)
         print("P val on alpha_0:", mod.pvalues_alpha[0])
@@ -46,7 +90,7 @@ def _get_vecm_coint_params(mod):
     else:
         wgt = np.vstack((mod.const_coint, mod.beta)).flatten()
     
-    return wgt, mod.alpha[0]
+    return wgt, mod.alpha.flatten()
 
 
 def get_insample_coint_resids(mod, raw):
@@ -136,7 +180,8 @@ def RegressionMain(full_raw, target_col, feature_cols, test_size, model='Ridge',
     cols = np.hstack((target_col, feature_cols))
     data = full_raw[cols].copy(deep=True)
     raw_clean = data.asfreq(resample_per).dropna(how='any')
-    data = data.ewm(span=ewm_span).mean()
+    if ewm_span is not None:
+        data = data.ewm(span=ewm_span).mean()
     data = data.asfreq(resample_per).dropna(how='any')
     if logpx:
         data = data.apply(np.log)
@@ -152,14 +197,15 @@ def RegressionMain(full_raw, target_col, feature_cols, test_size, model='Ridge',
     
     x_find_alpha = x_full.iloc[:int(data.shape[0]/4)]
     y_find_alpha = y_full.iloc[:int(data.shape[0]/4)]
-    tss = TimeSeriesSplit(n_splits=500)
+    tss = TimeSeriesSplit(n_splits=20)
+    alpha_space = np.logspace(-4,2,25)
     if model == 'Ridge':
-        cv = RidgeCV(alphas=[x/1000. for x in range(1,100,5)], cv=tss)
+        cv = RidgeCV(alphas=alpha_space, cv=tss)
         cv.fit(x_find_alpha, y_find_alpha)
         alpha = cv.alpha_
         
     elif model == 'Lasso':
-        cv = LassoCV(alphas=[x/1000. for x in range(1,100,5)], cv=tss)
+        cv = LassoCV(alphas=alpha_space, cv=tss)
         cv.fit(x_find_alpha, y_find_alpha)
         alpha = cv.alpha_
         
@@ -180,7 +226,8 @@ def RegressionMain(full_raw, target_col, feature_cols, test_size, model='Ridge',
         pred_full = pred_full.append(pred)
         
         # save to return params
-        dates.append(data.index[train_idx[-1]])
+        # date associated with beta (for rebalancing) should be day after computation
+        dates.append(data.index[test_idx[0]])
         betas.append(beta)
     
     #rescale if necessary
@@ -211,6 +258,8 @@ def CointMain(full_raw, target_col, feature_cols, test_size, max_train_size=200,
     alphas=[]
     coint_ranks = []
     alpha_pvals = []
+    alpha_tstats = []
+    beta_tstats = []
     mods = []
     adj_betas = []
     prev_beta_avg = None
@@ -224,7 +273,7 @@ def CointMain(full_raw, target_col, feature_cols, test_size, max_train_size=200,
         b, a = _get_vecm_coint_params(mod)
         b = b.flatten()
         betas.append(b)
-        alphas.append(a[0])
+        alphas.append(a)
         
         # i dont want betas jumping all over the place, trim the betas
         if c < 5 or beta_clippers is None:
@@ -242,7 +291,9 @@ def CointMain(full_raw, target_col, feature_cols, test_size, max_train_size=200,
             
         resid_full = resid_full.append(resid)
         coint_ranks.append(mod.coint_rank)
-        alpha_pvals.append(mod.pvalues_alpha[0].flatten())
+        alpha_pvals.append(mod.pvalues_alpha.flatten())
+        alpha_tstats.append(mod.tvalues_alpha.flatten())
+        beta_tstats.append(mod.tvalues_beta.flatten())
         mods.append(mod)
         c+=1
     
@@ -252,5 +303,6 @@ def CointMain(full_raw, target_col, feature_cols, test_size, max_train_size=200,
     if return_simple:
         return resid_full, mod_dates, adj_betas
     else:
-        return np.array(betas), np.array(alphas), coint_ranks, np.array(alpha_pvals), mods, np.array(adj_betas), mod_dates,resid_full
+        return np.array(betas), np.array(alphas), coint_ranks, np.array(alpha_pvals), np.array(alpha_tstats), \
+            np.array(beta_tstats), mods, np.array(adj_betas), mod_dates, resid_full
     
