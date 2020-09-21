@@ -265,8 +265,7 @@ def generate_perf_summary(events, close_tr, tc_pct=0.0, rebal_cost=None):
     num_trades = events[abs(events['side'])>0].shape[0]
     
     # update ret for at least execution tc, 2x in and out 
-    # already done
-    #events.loc[:, 'ret'] -= 2*tc_pct*events.loc[:, 'size']/events.loc[:, 'trgt']
+    
     avg_pnl = events['ret'].mean()
     long_ratio = events[events['side']==1].shape[0]/num_trades
     hit_ratio = events[events['ret']>0].shape[0]/num_trades
@@ -280,7 +279,7 @@ def generate_perf_summary(events, close_tr, tc_pct=0.0, rebal_cost=None):
    
     
 def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_lookback, entry_threshold, pt_sl, vertbar,
-                       max_signals=1, even_weight=True, log_ret=False, rebal_freq=None, plot=True, tc_pct=0.0):
+                       max_signals=1, even_weight=True, log_ret=False, rebal_freq=None, plot=True, tc_pct=0.0, roll_cost=None):
     """
         Run a backtest based on residual reversion. Plot the resulting positions and MTM pnl, and show the stats summary
     :param resids: (pd.Series) of residuals
@@ -289,6 +288,8 @@ def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_
     :param entry_threshold: (float) zscore entry
     :param rebal_freq: (pandas date freq or None) how often to rebalance portfolio outside of weight changes
         in other words, how often pnl is reinvested
+    :param tc_pct: (float) transaction cost assumption 1e-4 = 1bp
+    :param roll_costs: (pd.Series) roll costs assumption indexed by roll dates
     """
     # generate ETF synthetic series
 
@@ -311,8 +312,17 @@ def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_
     events = generate_pnl(events0, trs, pct_change=True)
     
     # tc cost on $1 (i.e. 1bp = 1e-4), weights_diff_delev is absolute change in weights
-    rebal_cost_srs = -tc_pct*etf_inter_data['weights_diff_delev'].squeeze()
-    events, rebal_cost_strat = _get_tc(events, tc_pct, rebal_cost_srs)
+    rebal_cost_srs = -tc_pct*etf_inter_data['weights_diff_delev'].squeeze().rename('weights')
+    
+    if roll_cost is not None:
+        # add tc cost on $1 rolled
+        total_rebal_cost_srs = rebal_cost_srs.to_frame().join(roll_cost.rename('roll_cost'), how='outer').fillna(0.0)
+        total_rebal_cost_srs['total_cost'] = total_rebal_cost_srs['weights']+total_rebal_cost_srs['roll_cost']
+    else: 
+        total_rebal_cost_srs=rebal_cost_srs.rename('total_cost').to_frame()
+    
+    # update events['ret'] for tc and calculate full cost to apply to mtm_pnl
+    events, rebal_cost_strat = _get_tc(events, tc_pct, total_rebal_cost_srs['total_cost'])
     
     mtm_pnl = generate_mtm_pnl(events, trs, tc_pct) # subtract tc from return on open and close, doesn't use ret
     rebal_cost_strat = rebal_cost_strat.reindex(mtm_pnl.index, fill_value=0.0).rename('strat')
@@ -325,13 +335,12 @@ def run_resid_backtest(closes, weights, carry, resids, resid_lookback_diff, vol_
         pnl_index.plot(ax=ax[1])
         trs.plot(ax=ax[2])
         ax[0].set_title("Exposure in long USDCAD vs Basket")
-        ax[1].set_title(r"Daily MTM PnL ({0}bp TC)".format(int(tc_pct*1e4)))
+        ax[1].set_title(r"Daily MTM Equity Curve ({0}bp TC)".format(int(tc_pct*1e4)))
         fig.tight_layout()
         plt.show()
     perf_summary = generate_perf_summary(events, trs, tc_pct=tc_pct, rebal_cost=rebal_cost_strat)
     
     return events, df0, pnl_index, exposures, trs, perf_summary
-
 
 
 if __name__=='__main__':
