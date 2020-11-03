@@ -28,7 +28,7 @@ def get_t1(s, close, vertbar=30):
     """
     :param s: (pd.int64index,pd.datetimeindex) entry signal dates index
     :param close: (pd.Series) close prices
-    :param vertbar: (int) vertical bar distance from t0
+    :param vertbar: (int) vertical bar distance from t0 (cal day)
     :return: (pd.Series) timeouts
     """
     if isinstance(s, pd.Series):
@@ -39,7 +39,8 @@ def get_t1(s, close, vertbar=30):
         t1 = close.index.searchsorted(s+vertbar)
     else:
         t1 = close.index.searchsorted(s+pd.Timedelta(days=vertbar))
-    t1 = t1[t1<close.shape[0]]
+    #t1 = t1[t1<close.shape[0]]
+    t1[t1==close.shape[0]] = close.shape[0]-1
     t1 = pd.Series(close.index[t1], index=s[:t1.shape[0]]).dropna()
     return t1
 
@@ -70,7 +71,7 @@ def _apply_pt_sl(events, close, pt_sl=(1,1)):
     return out
 
 
-def _apply_pt_sl_vs_model(events, close, model_resids, pt_sl=(1,1)):
+def _apply_pt_sl_vs_model(events, close, model_resids, pt_sl=(1,1), exit_pct=False):
     """
     Applies tp/sl based on model residual zscores, pt_sl in terms of zscore
         positive numbers are on the same side of 0 as the zscore
@@ -82,6 +83,7 @@ def _apply_pt_sl_vs_model(events, close, model_resids, pt_sl=(1,1)):
     :param close: (pd.Series) close prices
     :param model_resids: (pd.Series) model_residual series zscores
     :param tp_sl: (list) 2-tuple take profit/stop loss
+    :param exit_pct: (bool) use tp_sl as percent of entry z-score
     :return: (pd.DataFrame) adds t1, sl, tp to events
     """
     if 'side' not in events.columns:
@@ -90,19 +92,28 @@ def _apply_pt_sl_vs_model(events, close, model_resids, pt_sl=(1,1)):
     out = events['t1'].copy(deep=True).to_frame()
     out['tp'] = pd.NaT
     out['sl'] = pd.NaT
-    tp = pt_sl[0]
-    sl = pt_sl[1]
+    if exit_pct:
+        if 'entry_score' not in events.columns:
+            raise ValueError('If exit_pct is true need to have the entry zscore')
+        out['tp_val'] = abs(events.loc[:, 'entry_score']) * pt_sl[0]
+        out['sl_val'] = abs(events.loc[:, 'entry_score']) * pt_sl[1]
+    else:
+        out['tp_val'] = pt_sl[0]
+        out['tp_val'] = pt_sl[1]
     
+    # do we use pt_sl as a pct of the entry signal or just a float
+
     for loc, t1 in events['t1'].fillna(close.index[-1]).iteritems():
         # residuals at each point from loc:t1
         df0 = model_resids.loc[loc:t1]
         if events.loc[loc, 'side']==1:
-            out.loc[loc, 'tp'] = df0[df0>-tp].index.min() # earliest tp
-            out.loc[loc, 'sl'] = df0[df0<-sl].index.min()
+            out.loc[loc, 'tp'] = df0[df0>-out.loc[loc, 'tp_val']].index.min() # earliest tp
+            out.loc[loc, 'sl'] = df0[df0<-out.loc[loc, 'sl_val']].index.min()
         else:
-            out.loc[loc, 'tp'] = df0[df0<tp].index.min() # earliest less than thresh
-            out.loc[loc, 'sl'] = df0[df0>sl].index.min() # earliest greater than
+            out.loc[loc, 'tp'] = df0[df0<out.loc[loc, 'tp_val']].index.min() # earliest less than thresh
+            out.loc[loc, 'sl'] = df0[df0>out.loc[loc, 'sl_val']].index.min() # earliest greater than
     
+    out.drop(['tp_val', 'sl_val'], axis=1, inplace=True)
     return out
     
     
@@ -130,11 +141,13 @@ def _get_barrier_touched(df0, events):
     return df0
 
 
-def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=None):
+def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=None, exit_pct=False):
     """
     :param events: (pd.DataFrame) index=entry, t1=timeouts, side=tradeside
     :param close: (pd.Series) of close prices
     :param trgt: (pd.Series) time depdt target sizings (trailing vols)
+    :param model_resids: (pd.Series) model zscores
+    :param exit_pct: (bool) whether to compute exit signals as percentage of entry signal
     :return: (pd.DataFrame) index=entry, t1=exit tp or sl, side=tradeside
     """
     side_pred = True
@@ -149,7 +162,8 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=N
     events['trgt'] = trgt
     events = events.dropna(subset=['trgt'])
     if model_resids is not None:
-        df0 = _apply_pt_sl_vs_model(events, close, model_resids, pt_sl)
+        events['entry_score'] = model_resids
+        df0 = _apply_pt_sl_vs_model(events, close, model_resids, pt_sl, exit_pct=exit_pct)
     else:
         df0 = _apply_pt_sl(events, close, pt_sl)
     
@@ -157,8 +171,15 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=N
     
     if not side_pred:
         events = events.drop('side', axis=1)
-    events['tp'] = pt_sl[0]
-    events['sl'] = pt_sl[1]
+    if exit_pct:
+        # exit is a percentage of the entry signal
+        if 'entry_score' not in events.columns:
+            raise ValueError('if exit_pct is true need entry_score column')
+        events['tp'] = pt_sl[0]*events['entry_score']
+        events['sl'] = pt_sl[1]*events['entry_score']
+    else:
+        events['tp'] = pt_sl[0]
+        events['sl'] = pt_sl[1]
     return events, df0
 
 
