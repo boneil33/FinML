@@ -31,8 +31,8 @@ CT_SWAP_MAP = {
     'TU': ['2y'],
     'FV': ['5y'],
     'TY': ['7y'],
-    'US': ['15y', '20y'],
-    'WN': ['20y', '30y']
+    'US': ['swap_US'],
+    'WN': ['25y']
 }
 
 CT_SIZES = {
@@ -45,7 +45,32 @@ CT_SIZES = {
 
 COT_COLS = ['Com', 'NonCom', 'NonRep', 'AM', 'LevFunds', 'Dealers', 'OtherRep']
 PRICE_DUR_COLS = ['PX_LAST', 'FUT_EQV_DUR_NOTL', 'OPEN_INT']
-
+def get_interp_swaps(swaps_raw):
+    swaps = swaps_raw.copy(deep=True)
+    us_gap_dt = dt.date(2015,3,11)
+    swaps_len = swaps.shape[0]
+    rel_idx = swaps.loc[us_gap_dt:].index
+    len_post = len(rel_idx)
+    the_roll = swaps.loc[us_gap_dt, '15y'] - swaps.loc[us_gap_dt, '20y']
+    the_roll_arr = np.hstack([[0.]*(swaps_len-len_post), [the_roll]*len_post])
+    
+    # construct approximate weights for relevant swap for US
+    w_20y = np.hstack([[0.]*(swaps_len-len_post), [np.interp(i, [0, len_post], [1, 0]) for i in range(1, len_post+1)]])
+    w_15y = np.hstack([[1.]*(swaps_len-len_post), list(reversed(w_20y))])
+    
+    # interpolate between 20y and 15y to adjust for US contract issues 
+    weights = pd.DataFrame([[a,b] for a,b in zip(w_20y, w_15y)], index=swaps.index, columns=['w_20y', 'w_15y'])
+    swaps['swap_US'] = swaps.loc[:, ['20y', '15y']].join(weights).apply(lambda x: x['20y'] * x['w_20y']
+                                                    + x['15y'] * x['w_15y'], axis=1)
+    # apply simple roll to smooth returns for US
+    swaps.loc[:, 'swap_US'] = swaps.loc[:, 'swap_US'] + the_roll_arr
+    
+    # make simple 25y swap
+    swaps['25y'] = (swaps['30y'] + swaps['20y']) / 2.
+    #swaps.loc[:, ['15y', 'swap_US', '20y']].plot()
+    #swaps.loc[dt.date(2015,3,10):, ['15y','swap_US']]
+    return swaps
+    
 
 def rename_legacy_cols(col):
     col_name = col.lower()
@@ -149,7 +174,7 @@ def adjust_ct_dfs(ct_dfs, swaps, oi_avg_len=20):
     return ret_dfs
 
 
-def get_rolling_cts(adj_ct_dfs, suffix, window, resample_per='W-FRI'):
+def get_rolling_cts(adj_ct_dfs, suffix, window, swap_chg_lags=[1], resample_per='W-FRI'):
     """
         Compute data differenced over window periods, resampled on Fridays (release date)
         goal to have stationary series with some memory
@@ -159,9 +184,57 @@ def get_rolling_cts(adj_ct_dfs, suffix, window, resample_per='W-FRI'):
         df = df.asfreq(resample_per, method='ffill')
         rel_cols = np.hstack([[c+suffix for c in COT_COLS], CT_SWAP_MAP[k]])
         new_df = df.loc[:, rel_cols].copy(deep=True).diff(window)
+        
+        # get indicators whether position change corresponds to change in swap yield
+        ind_cols = [c+'_ind' for c in COT_COLS]
+        first_swap = CT_SWAP_MAP[k][0]
+        for col, ind in zip([c+suffix for c in COT_COLS], ind_cols):
+            new_df[ind] = (np.sign(new_df[col])!=np.sign(new_df[first_swap])).astype(int)
+            new_df[col+'_rightsign'] = new_df[ind] * new_df[col]
+        
+        # add lagged swap changes
+        for i in swap_chg_lags:
+            lag = i*window
+            new_df[first_swap + '_lag' + str(lag)] = new_df[first_swap].shift(lag)
+            new_df[first_swap + '_fwd' + str(lag)] = new_df[first_swap].shift(-lag)
+        
         ret_dfs[k] = new_df
     
     return ret_dfs
+
+
+
+def get_norm_curve_diffs(curves, r, window):
+    """ This computes the differences between ct1 and ct0 of first differences of each feature
+         and normalizes the features
+    :return: dict of curve diff dataframes
+    """
+    curve_diffs = {}
+    for curve in curves:
+        swap0 = CT_SWAP_MAP[curve[0]][0]
+        swap1 = CT_SWAP_MAP[curve[1]][0]
+
+        # first normalize the features
+        adj_curve_arr = []
+        for c in curve:
+            curve_df = r[c].copy(deep=True).dropna(how='all')
+            curve_df = curve_df.subtract(curve_df.mean(axis=0, skipna=True))
+            curve_df = curve_df.divide(curve_df.std(axis=0, skipna=True))
+            adj_curve_arr.append(curve_df)
+
+
+        curve_diff = (adj_curve_arr[1] - adj_curve_arr[0]).dropna(axis=1, how='all')
+        # compute par curve levels
+        swap_curve_name = '-'.join([swap1, swap0])
+        curve_diff[swap_curve_name] = r[curve[1]].loc[:, swap1] - r[curve[0]].loc[:, swap0]
+        curve_diff[swap_curve_name+'_lag'+str(window)] = curve_diff[swap_curve_name].shift(window)
+        curve_diff[swap_curve_name+'_fwd'+str(window)] = curve_diff[swap_curve_name].shift(-window)
+        
+        
+        curve_name = '-'.join(list(reversed(curve)))
+        curve_diffs[curve_name] = curve_diff
+        
+    return curve_diffs
 
 
 def test_adfuller(input_df, maxlag=1):

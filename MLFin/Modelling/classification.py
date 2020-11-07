@@ -1,13 +1,105 @@
+import numpy as np
+import pandas as pd
+import datetime as dt
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+from sklearn.decomposition import PCA
+from sklearn.linear_model import Lasso, Ridge, LassoCV, RidgeCV, LogisticRegression, LinearRegression
+from sklearn.model_selection import TimeSeriesSplit, train_test_split, GridSearchCV, cross_val_score
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline, make_pipeline
+from sklearn.metrics import precision_recall_curve, roc_curve, confusion_matrix, f1_score, make_scorer, mean_squared_error
+from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+from sklearn.dummy import DummyClassifier, DummyRegressor
+
+
+def run_cv(r, ct, window, feat_adj, is_start_dt, num_features, target, tss_splits=20, model=Lasso(),
+              model_type='Regression', max_train_size=None, hyperparam_name='alpha',
+              sample_weight=None, param_space=np.logspace(-4,4,50), scorer=None, cat_features=[]):
+    """
+        Run a simple cross validation on lasso to determine whether any of these features 
+        have predictive power.
+    
+    :param r: (dict of dataframes) output from get_rolling_cts, full sample we'll chop test off 0.25
+    :param ct: (string) contract to look at
+    :param feat_adj: (string) adjuster for features (e.g. _dv01)
+    :return: (GridSearchCV, pd.Series) the search object and info from Ridge cross validated on contract data
+        betas: array
+        best_score: neg MSE
+        best_score_ratio: neg MSE/null prior(constant, average prediction)
+        alpha: best ridge alpha
+        
+    """
+
+    data = r[ct].copy(deep=True).loc[is_start_dt:].dropna(how='any')
+    features = np.hstack([num_features, cat_features])
+    X = data[features]
+    y = data[target]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, shuffle=False)
+    is_end_dt = y_test.index[-1]
+
+    # standardize variables, going to use full sample normalization don't think it'll matter much 
+    #    since the data is already fairly stationary
+    num_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scale', StandardScaler(with_mean=True))
+    ])
+    cat_transformer = Pipeline(steps=[
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ])
+    #combine different feature types
+    preprocessor = ColumnTransformer(transformers=[
+        ('num', num_transformer, num_features),
+        ('cat', cat_transformer, cat_features)
+    ])
+
+    tss = TimeSeriesSplit(n_splits=tss_splits, max_train_size=max_train_size)
+    
+    pipe = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('model', model)
+    ])
+    search = cv_gs_wrap(pipe, X_train, y_train, hyperparam_name, param_space, tss_splits=tss_splits, 
+                        sample_weight=sample_weight, scorer=None, max_train_size=max_train_size)
+    
+    if model_type.lower()=='regression':
+        dummy_clf = DummyRegressor(strategy='mean')
+    elif model_type.lower()=='classification':
+        dummy_clf = DummyClassifier(strategy='prior') # will guess the most frequent class
+    else:
+        raise ValueError(r"model_type {0} not accepted must be Regression or Classification".format(model_type))
+    dummy_pipe = Pipeline([
+        ('preprocessor', preprocessor),
+        ('dummy', dummy_clf)
+    ]).fit(X_train, y_train)
+    
+    dummy_score = cross_val_score(dummy_pipe, X_train, y_train, cv=tss, scoring=scorer)
+    output_df = pd.Series(name=ct)
+    output_df['beta'] = search.best_estimator_[-1].coef_
+    output_df['best_score'] = search.best_score_
+    output_df[hyperparam_name] = search.best_params_['model__'+hyperparam_name]
+    output_df['best_score_ratio'] = search.best_score_ / dummy_score.mean()
+    
+    return search, output_df
+
+
 # cross validate to find regularization parameter C = 1/lambda
-def cv_gs_wrap(clf, X_train, y_train, reg_param_name, param_space, sample_weight=None, tss_splits=5, scorer='f1', verbose=False):
+def cv_gs_wrap(clf, X_train, y_train, reg_param_name, param_space, sample_weight=None, 
+               tss_splits=5, scorer='f1', verbose=False, max_train_size=None):
     """
     Wrapper for gridsearchcv with weighting
     Doesn't appear you can fit with sample weights and score with them, either one or the other and the latter is a hack
     if sample_weight is not none, scorer needs to be a make_scorer that takes sample weights (e.g. score_f1_weighted below)
     """
-    param_grid = {'classifier__'+reg_param_name: param_space}#np.logspace(-4, 2, 50)}
-    fit_params = {'classifier__sample_weight': sample_weight}
-    tss = TimeSeriesSplit(n_splits=tss_splits)
+    param_grid = {'model__'+reg_param_name: param_space}#np.logspace(-4, 2, 50)}
+    fit_params = {'model__sample_weight': sample_weight}
+    tss = TimeSeriesSplit(n_splits=tss_splits, max_train_size=max_train_size)
     
     
     if sample_weight is not None:
@@ -34,7 +126,7 @@ def score_f1_weighted(y_true, y_pred, sample_weight):
 # display CV metrics
 def display_cv_metrics(search, reg_param_name, scorer, log_scale=False):
     evalScore = np.array(search.cv_results_['mean_test_score'])
-    evalC = np.array(search.cv_results_['param_classifier__'+reg_param_name].data)
+    evalC = np.array(search.cv_results_['param_model__'+reg_param_name].data)
     scorer_name = ''
     if isinstance(scorer, str):
         scorer_name = scorer
@@ -97,7 +189,7 @@ def display_oos_metrics(search, X_test, y_test):
     
 # for logistic regression, just the model coefficients best we can do- using l2 normalization so should shrink losers to 0
 def display_feature_imp(search, num_features):
-    best_clf = search.best_estimator_.named_steps['classifier']
+    best_clf = search.best_estimator_.named_steps['model']
     if hasattr(best_clf, 'feature_importances_'):
         feature_imp = best_clf.feature_importances_
         sorted_idx = feature_imp.argsort()
@@ -155,7 +247,7 @@ if __name__=='__main__':
   clf_svc_base = SVC(kernel='linear', gamma='scale', class_weight='balanced')
   clf_svc = Pipeline(steps=[
       ('preprocessor', preprocessor),
-      ('classifier', clf_svc_base)])
+      ('model', clf_svc_base)])
 
   # collect the data and split for testing
   all_features = np.hstack((cat_features, num_features, pred_weight))
