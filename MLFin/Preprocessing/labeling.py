@@ -151,7 +151,7 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=N
     :return: (pd.DataFrame) index=entry, t1=exit tp or sl, side=tradeside
     """
     side_pred = True
-    trgt = trgt.loc[events.index]
+    trgt = trgt.reindex(events.index)
     trgt = trgt[trgt>minret]
     if 't1' not in events.columns:
         events['t1'] = pd.NaT
@@ -167,7 +167,7 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=N
     else:
         df0 = _apply_pt_sl(events, close, pt_sl)
     
-    events['t1'] = df0.dropna(how='all').min(axis=1)
+    events.loc[:, 't1'] = df0.dropna(how='all').min(axis=1)
     
     if not side_pred:
         events = events.drop('side', axis=1)
@@ -175,11 +175,11 @@ def get_events(events, close, trgt, pt_sl=(1,1), minret=0.000001, model_resids=N
         # exit is a percentage of the entry signal
         if 'entry_score' not in events.columns:
             raise ValueError('if exit_pct is true need entry_score column')
-        events['tp'] = pt_sl[0]*events['entry_score']
-        events['sl'] = pt_sl[1]*events['entry_score']
+        events.loc[:, 'tp'] = pt_sl[0]*events['entry_score']
+        events.loc[:, 'sl'] = pt_sl[1]*events['entry_score']
     else:
-        events['tp'] = pt_sl[0]
-        events['sl'] = pt_sl[1]
+        events.loc[:, 'tp'] = pt_sl[0]
+        events.loc[:, 'sl'] = pt_sl[1]
     return events, df0
 
 

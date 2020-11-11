@@ -11,16 +11,16 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline, make_pipeline
-from sklearn.metrics import precision_recall_curve, roc_curve, confusion_matrix, f1_score, make_scorer, mean_squared_error
+from sklearn.metrics import precision_recall_curve, roc_curve, confusion_matrix, f1_score, make_scorer, mean_squared_error, accuracy_score
 from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
 from sklearn.dummy import DummyClassifier, DummyRegressor
 
 
-def run_cv(r, ct, window, feat_adj, is_start_dt, num_features, target, tss_splits=20, model=Lasso(),
-              model_type='Regression', max_train_size=None, hyperparam_name='alpha',
-              sample_weight=None, param_space=np.logspace(-4,4,50), scorer=None, cat_features=[]):
+def run_cv(raw, ct, feat_adj, is_start_dt, num_features, target, sample_weight=None, 
+           tss_splits=20, model=Lasso(), model_type='Regression', max_train_size=None, 
+           hyperparam_name='alpha', param_space=np.logspace(-4,4,50), scorer=None, cat_features=[]):
     """
         Run a simple cross validation on lasso to determine whether any of these features 
         have predictive power.
@@ -28,6 +28,7 @@ def run_cv(r, ct, window, feat_adj, is_start_dt, num_features, target, tss_split
     :param r: (dict of dataframes) output from get_rolling_cts, full sample we'll chop test off 0.25
     :param ct: (string) contract to look at
     :param feat_adj: (string) adjuster for features (e.g. _dv01)
+    :param sample_weight: (string) colname for sample_weight
     :return: (GridSearchCV, pd.Series) the search object and info from Ridge cross validated on contract data
         betas: array
         best_score: neg MSE
@@ -35,9 +36,13 @@ def run_cv(r, ct, window, feat_adj, is_start_dt, num_features, target, tss_split
         alpha: best ridge alpha
         
     """
-
-    data = r[ct].copy(deep=True).loc[is_start_dt:].dropna(how='any')
-    features = np.hstack([num_features, cat_features])
+    
+    data = raw.copy(deep=True).loc[is_start_dt:].dropna(how='any')
+    if sample_weight is None:
+        sample_weight_arr = []
+    else:
+        sample_weight_arr= [sample_weight]
+    features = np.hstack([num_features, cat_features, sample_weight_arr])
     X = data[features]
     y = data[target]
 
@@ -65,11 +70,17 @@ def run_cv(r, ct, window, feat_adj, is_start_dt, num_features, target, tss_split
         ('preprocessor', preprocessor),
         ('model', model)
     ])
+    if not sample_weight :
+        sample_weight_data = None
+    else:
+        sample_weight_data = X_train[sample_weight]
+        X_train = X_train.drop(sample_weight, axis=1)
+        
     search = cv_gs_wrap(pipe, X_train, y_train, hyperparam_name, param_space, tss_splits=tss_splits, 
-                        sample_weight=sample_weight, scorer=None, max_train_size=max_train_size)
+                        sample_weight=sample_weight_data, scorer=scorer, max_train_size=max_train_size)
     
     if model_type.lower()=='regression':
-        dummy_clf = DummyRegressor(strategy='mean')
+        dummy_clf = DummyRegressor(strategy='mean') # will just guess the average
     elif model_type.lower()=='classification':
         dummy_clf = DummyClassifier(strategy='prior') # will guess the most frequent class
     else:
@@ -113,6 +124,125 @@ def cv_gs_wrap(clf, X_train, y_train, reg_param_name, param_space, sample_weight
         print(search.best_params_)
 
     return search
+
+
+# cross valididation with weights passed to scoring
+def cv_gs_wrap_weighted(base_clf, X, y, reg_param_name, param_space, sample_weight, 
+               tss_splits=5, scorer='accuracy', verbose=False, max_train_size=None, clf_params={}):
+    """
+        In order to apply sample weights to the scorer we need to implement our own gridsearchcv
+    :param base_clf: a classifier that implements predict, we will apply params later
+    """
+    if scorer!='accuracy' or sample_weight is None:
+        raise ValueError('only implemented for mean accuracy scoring with weights')
+    
+    
+    tss = TimeSeriesSplit(n_splits=tss_splits, max_train_size=max_train_size)
+    #search = GridSearchCV(clf, param_grid, scoring=scorer, n_jobs=-1, cv=tss)
+    #search.fit(X_train, y_train, **fit_params)
+    output_srs = pd.Series([[], 0, None], index=['beta', 'score', reg_param_name])
+    for hyperparam in param_space:
+        clf_params['model__'+reg_param_name] = hyperparam
+        clf = base_clf.set_params(**clf_params)
+        scores = []
+        for train_idx, test_idx in tss.split(X=X, y=y):
+            X_train = X.iloc[train_idx, :]
+            y_train = y.iloc[train_idx]
+            w_train = sample_weight.iloc[train_idx]
+            X_test = X.iloc[test_idx, :]
+            y_test = y.iloc[test_idx]
+            w_test = sample_weight.iloc[test_idx]
+            
+            # fit, predict and score with weights
+            clf.fit(X_train, y_train, model__sample_weight=w_train)
+            y_pred = clf.predict(X=X_test)
+            score = accuracy_score(y_test, y_pred, sample_weight=w_test)
+            scores.append(score)
+        avg_score = np.array(scores).mean()
+        if avg_score > output_srs['score']:
+            clf.fit(X, y, model__sample_weight=sample_weight)
+            beta = clf[-1].coef_
+            output_srs['beta'] = beta
+            output_srs['score'] = avg_score
+            output_srs[reg_param_name] = hyperparam
+        
+    return output_srs
+    
+
+def run_cv_weighted(raw, ct, feat_adj, is_start_dt, num_features, target, sample_weight, tss_splits=20, 
+                    model=LogisticRegression(multi_class='auto'), max_train_size=None, hyperparam_name='C',
+                    param_space=np.logspace(-4,4,50), scorer='accuracy', cat_features=[], clf_params={}):
+    """
+        Run a simple cross validation on lasso to determine whether any of these features 
+        have predictive power with scores weighted.
+    
+    :param r: (dict of dataframes) output from get_rolling_cts, full sample we'll chop test off 0.25
+    :param ct: (string) contract to look at
+    :param feat_adj: (string) adjuster for features (e.g. _dv01)
+    :param sample_weight: (string) colname for sample_weight
+    :return: (GridSearchCV, pd.Series) the search object and info from Ridge cross validated on contract data
+        betas: array
+        best_score: neg MSE
+        best_score_ratio: neg MSE/null prior(constant, average prediction)
+        alpha: best ridge alpha
+        
+    """
+    
+    data = raw.copy(deep=True).loc[is_start_dt:].dropna(how='any')
+    if sample_weight is None:
+        sample_weight_arr = []
+    else:
+        sample_weight_arr= [sample_weight]
+    features = np.hstack([num_features, cat_features, sample_weight_arr])
+    X = data[features]
+    y = data[target]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, shuffle=False)
+
+    # standardize variables, going to use full sample normalization don't think it'll matter much 
+    #    since the data is already fairly stationary
+    num_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scale', StandardScaler(with_mean=True))
+    ])
+    cat_transformer = Pipeline(steps=[
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ])
+    #combine different feature types
+    preprocessor = ColumnTransformer(transformers=[
+        ('num', num_transformer, num_features),
+        ('cat', cat_transformer, cat_features)
+    ])
+
+    tss = TimeSeriesSplit(n_splits=tss_splits, max_train_size=max_train_size)
+    
+    pipe = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('model', model)
+    ])
+    sample_weight_data = X_train[sample_weight]
+    X_train = X_train.drop(sample_weight, axis=1)
+        
+    output_srs = cv_gs_wrap_weighted(pipe, X_train, y_train, hyperparam_name, param_space,
+                                     sample_weight_data, tss_splits=tss_splits, scorer=scorer, 
+                                     max_train_size=max_train_size, clf_params=clf_params)
+    
+    
+    dummy_clf = DummyClassifier(strategy='prior') # will guess the most frequent class
+    
+    dummy_pipe = Pipeline([
+        ('preprocessor', preprocessor),
+        ('dummy', dummy_clf)
+    ]).fit(X_train, y_train)
+    
+    dummy_score = cross_val_score(dummy_pipe, X_train, y_train, cv=tss, scoring=scorer)
+    output_df = pd.Series(name=ct)
+    output_df['beta'] = output_srs['beta']
+    output_df['best_score'] = output_srs['score']
+    output_df[hyperparam_name] = output_srs[hyperparam_name]
+    output_df['best_score_ratio'] = output_srs['score'] / dummy_score.mean()
+    
+    return output_df
 
 
 def score_f1_weighted(y_true, y_pred, sample_weight):
