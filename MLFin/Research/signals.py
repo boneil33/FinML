@@ -8,10 +8,13 @@ Created on Sat Jan 25 17:35:30 2020
 import pandas as pd
 import numpy as np
 import datetime as dt
+import seaborn as sns
+import matplotlib.pyplot as plt
+from statsmodels.api import tsa
 from Preprocessing.labeling import resample_close, get_t1, get_events, get_lookback_vol
 from Research.fx_utils import fx_data_import, bbg_data_import
 from Research.FXTesting import pca_distance_loop, get_nonusd_pair_data, get_nonusd_pairs
-from Preprocessing.sampling import get_num_conc_events_side, get_max_concurrency
+from Preprocessing.sampling import get_num_conc_events_side, get_max_concurrency, get_events_avg_uniqueness
 from Preprocessing.etf_trick import ETFTrick
 
 
@@ -64,7 +67,6 @@ def cusum_sym_filter(srs, threshold_pct):
     """
     dates = []
     signals = []
-    thresh = srs.mean()*threshold_pct
     diffs = srs.diff(1).dropna()
     sPlus = 0
     sMinus = 0
@@ -350,7 +352,7 @@ def generate_perf_summary(events, close_tr, tc_pct=0.0, rebal_cost=None):
     return summary
    
 
-def draw_signal_response(events, bstart=-2., bend=2., bwidth=0.25):
+def draw_signal_response(events, bstart=-2., bend=2., bwidth=0.25, notch=True):
     # weight the returns by avg uniqueness and take away side (so want shorts to return negative)
     events['tw'] = get_events_avg_uniqueness(events['t1'], events['t1'])
     events['wgt_ret_noside'] = -events['ret']*events['side']*events['tw']
@@ -363,7 +365,7 @@ def draw_signal_response(events, bstart=-2., bend=2., bwidth=0.25):
     # get integer bins for signals
     events['bin'] = events.apply(lambda x: get_event_bins(x, bins), axis=1)
     fig, ax = plt.subplots(figsize=(8,6), dpi=300)
-    ax = sns.boxplot('bin', 'wgt_ret_noside', data=events, ax=ax, notch=True)
+    ax = sns.boxplot('bin', 'wgt_ret_noside', data=events, ax=ax, notch=notch)
 
     ticks = ax.get_xticks()
     ax.set_xticks(ticks+0.5)

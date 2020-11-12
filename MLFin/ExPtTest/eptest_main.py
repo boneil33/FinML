@@ -14,17 +14,9 @@ from statsmodels.graphics.tsaplots import plot_pacf
 import statsmodels.api as sm
 import statsmodels.tsa as tsa
 
-from sklearn.decomposition import PCA
 from sklearn.linear_model import Lasso, Ridge, LassoCV, RidgeCV, LogisticRegression, LinearRegression
 from sklearn.model_selection import TimeSeriesSplit, train_test_split, GridSearchCV
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import precision_recall_curve, roc_curve, confusion_matrix, f1_score, make_scorer
-from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.svm import SVC
+
 from Research.signals import zscore_signal
 
 CT_SWAP_MAP = {
@@ -98,7 +90,9 @@ def rename_tff_cols(col):
         raise ValueError(r"colname: {0} doesnt map".format(col))
     
 def read_ep_data(path=None):
-    # Read and simple cleaning
+    """
+        Read and simple cleaning
+    """
     if path is None:
         path = """C:/Users/Brendan/Downloads/ExodusPoint - Assignment Data (Rates Quantitative Strategist) - New York.xlsx"""
     
@@ -135,6 +129,10 @@ def read_ep_data(path=None):
 
 
 def get_ct_dfs(legacy, tff, futures, swaps):
+    """
+        Join the data per contract and return a dictionary of dataframes, 
+        one for each contract
+    """
     legacy = legacy.copy(deep=True)
     tff = tff.copy(deep=True) 
     futures = futures.copy(deep=True)
@@ -242,6 +240,9 @@ def get_norm_cts(r, swaps, trail_window, swap_chg_fwds=[1]):
 def get_daily_curve_diffs(curves, r, swaps):
     """
         Get just the daily curve diffs
+    :param curves: (list of tuples) combos of curves tuple
+    :param r: (dict) of dataframes returned by get_rolling_cts
+    :return: dataframe of curve diff 
     """
     curve_diffs = {}
     for curve in curves:
