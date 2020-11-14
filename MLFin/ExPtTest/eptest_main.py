@@ -297,7 +297,7 @@ def get_norm_curve_diffs(curves, r, window, swaps, swap_chg_fwds=[1], norm_windo
         
     return curve_diffs
 
-
+    
 def gen_subseq_returns(px, signal, max_len=30):
     """
         Generate ('single contract') returns subsequent to signal firing to evaluate predictiveness
