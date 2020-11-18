@@ -16,6 +16,7 @@ from sklearn.ensemble import RandomForestClassifier, BaggingClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
 from sklearn.dummy import DummyClassifier, DummyRegressor
+from sklearn.base import clone
 
 
 def run_cv(raw, ct, feat_adj, is_start_dt, num_features, target, sample_weight=None, 
@@ -133,7 +134,7 @@ def cv_gs_wrap_weighted(base_clf, X, y, reg_param_name, param_space, sample_weig
         In order to apply sample weights to the scorer we need to implement our own gridsearchcv
     :param base_clf: a classifier that implements predict, we will apply params later
     """
-    if scorer!='accuracy' or sample_weight is None:
+    if scorer not in ['accuracy', 'f1'] or sample_weight is None:
         raise ValueError('only implemented for mean accuracy scoring with weights')
     
     
@@ -143,7 +144,8 @@ def cv_gs_wrap_weighted(base_clf, X, y, reg_param_name, param_space, sample_weig
     output_srs = pd.Series([[], 0, None], index=['beta', 'score', reg_param_name])
     for hyperparam in param_space:
         clf_params['model__'+reg_param_name] = hyperparam
-        clf = base_clf.set_params(**clf_params)
+        clf = clone(base_clf)
+        clf.set_params(**clf_params)
         scores = []
         for train_idx, test_idx in tss.split(X=X, y=y):
             X_train = X.iloc[train_idx, :]
@@ -156,22 +158,36 @@ def cv_gs_wrap_weighted(base_clf, X, y, reg_param_name, param_space, sample_weig
             # fit, predict and score with weights
             clf.fit(X_train, y_train, model__sample_weight=w_train)
             y_pred = clf.predict(X=X_test)
-            score = accuracy_score(y_test, y_pred, sample_weight=w_test)
+            if scorer=='accuracy':
+                score = accuracy_score(y_test, y_pred, sample_weight=w_test)
+            elif scorer=='f1':
+                # props: https://stackoverflow.com/questions/49581104/sklearn-gridsearchcv-not-using-sample-weight-in-score-function
+                score = f1_score(y_test, y_pred, sample_weight=w_test)
+                
             scores.append(score)
         avg_score = np.array(scores).mean()
         if avg_score > output_srs['score']:
             clf.fit(X, y, model__sample_weight=sample_weight)
-            beta = clf[-1].coef_
+            if hasattr(clf[-1], 'coef_'):
+                beta = clf[-1].coef_
+            else:
+                beta = None
             output_srs['beta'] = beta
             output_srs['score'] = avg_score
             output_srs[reg_param_name] = hyperparam
         
-    return output_srs
+    # set best param and refit
+    clf_params['model__'+reg_param_name] = output_srs[reg_param_name]
+    ret_clf = clone(base_clf)
+    ret_clf.set_params(**clf_params)
+    ret_clf.fit(X, y, model__sample_weight=sample_weight)
+        
+    return output_srs, ret_clf
     
 
-def run_cv_weighted(raw, ct, feat_adj, is_start_dt, num_features, target, sample_weight, tss_splits=20, 
+def run_cv_weighted(raw, ct, feat_adj, is_start_dt, num_features, target, sample_weight_name, tss_splits=20, 
                     model=LogisticRegression(multi_class='auto'), max_train_size=None, hyperparam_name='C',
-                    param_space=np.logspace(-4,4,50), scorer='accuracy', cat_features=[], clf_params={}):
+                    param_space=np.logspace(-4,4,50), scorer='accuracy', cat_features=[], clf_params={}, return_clf=False):
     """
         Run a simple cross validation on lasso to determine whether any of these features 
         have predictive power with scores weighted.
@@ -179,7 +195,7 @@ def run_cv_weighted(raw, ct, feat_adj, is_start_dt, num_features, target, sample
     :param r: (dict of dataframes) output from get_rolling_cts, full sample we'll chop test off 0.25
     :param ct: (string) contract to look at
     :param feat_adj: (string) adjuster for features (e.g. _dv01)
-    :param sample_weight: (string) colname for sample_weight
+    :param sample_weight_name: (string) colname for sample_weight
     :return: (GridSearchCV, pd.Series) the search object and info from Ridge cross validated on contract data
         betas: array
         best_score: neg MSE
@@ -189,10 +205,10 @@ def run_cv_weighted(raw, ct, feat_adj, is_start_dt, num_features, target, sample
     """
     
     data = raw.copy(deep=True).loc[is_start_dt:].dropna(how='any')
-    if sample_weight is None:
+    if sample_weight_name is None:
         sample_weight_arr = []
     else:
-        sample_weight_arr= [sample_weight]
+        sample_weight_arr= [sample_weight_name]
     features = np.hstack([num_features, cat_features, sample_weight_arr])
     X = data[features]
     y = data[target]
@@ -220,10 +236,10 @@ def run_cv_weighted(raw, ct, feat_adj, is_start_dt, num_features, target, sample
         ('preprocessor', preprocessor),
         ('model', model)
     ])
-    sample_weight_data = X_train[sample_weight]
-    X_train = X_train.drop(sample_weight, axis=1)
+    sample_weight_data = X_train[sample_weight_name]
+    X_train = X_train.drop(sample_weight_name, axis=1)
         
-    output_srs = cv_gs_wrap_weighted(pipe, X_train, y_train, hyperparam_name, param_space,
+    output_srs, output_clf = cv_gs_wrap_weighted(pipe, X_train, y_train, hyperparam_name, param_space,
                                      sample_weight_data, tss_splits=tss_splits, scorer=scorer, 
                                      max_train_size=max_train_size, clf_params=clf_params)
     
@@ -242,7 +258,10 @@ def run_cv_weighted(raw, ct, feat_adj, is_start_dt, num_features, target, sample
     output_df[hyperparam_name] = output_srs[hyperparam_name]
     output_df['best_score_ratio'] = output_srs['score'] / dummy_score.mean()
     
-    return output_df
+    if return_clf:
+        return output_df, output_clf
+    else:
+        return output_df
 
 
 def score_f1_weighted(y_true, y_pred, sample_weight):
@@ -271,12 +290,15 @@ def display_cv_metrics(search, reg_param_name, scorer, log_scale=False):
     
     
 # look at some evaluation metrics of the training set with the optimal regularization parameter
-def display_is_metrics(search, X_train, y_train):
-    if hasattr(search, 'decision_function'):
-        y_prob = search.decision_function(X_train)
-    else:
-        y_prob = search.predict_proba(X_train)[:,1]
-    y_pred = search.predict(X_train)
+def display_is_metrics(search, X_train, y_train, y_prob=None, y_pred=None):
+    if search is None and y_prob is None:
+        raise ValueError('Need either search or y_prob/y_pred')
+    if search:
+        if hasattr(search, 'decision_function'):
+            y_prob = search.decision_function(X_train)
+        else:
+            y_prob = search.predict_proba(X_train)[:,1]
+        y_pred = search.predict(X_train)
     precision, recall, thresh = precision_recall_curve(y_train, y_prob)
     fp_rate, tp_rate, _ = roc_curve(y_train, y_prob)
     fig, ax = plt.subplots(figsize=(8,6),nrows=2)
@@ -294,12 +316,15 @@ def display_is_metrics(search, X_train, y_train):
     
     
 # look at some evaluation metrics of the test set with the optimal regularization parameter
-def display_oos_metrics(search, X_test, y_test):
-    if hasattr(search, 'decision_function'):
-            y_prob_t = search.decision_function(X_test)
-    else:
-        y_prob_t = search.predict_proba(X_test)[:,1]
-    y_pred_t = search.predict(X_test)
+def display_oos_metrics(search, X_test, y_test, y_prob_t=None, y_pred_t=None):
+    if search is None and y_prob_t is None:
+        raise ValueError('Need either search or y_prob/y_pred')
+    if search:
+        if hasattr(search, 'decision_function'):
+                y_prob_t = search.decision_function(X_test)
+        else:
+            y_prob_t = search.predict_proba(X_test)[:,1]
+        y_pred_t = search.predict(X_test)
     precision, recall, thresh = precision_recall_curve(y_test, y_prob_t)
     fp_rate, tp_rate, _ = roc_curve(y_test, y_prob_t)
     fig, ax = plt.subplots(figsize=(8,6),nrows=2)
@@ -319,7 +344,11 @@ def display_oos_metrics(search, X_test, y_test):
     
 # for logistic regression, just the model coefficients best we can do- using l2 normalization so should shrink losers to 0
 def display_feature_imp(search, num_features):
-    best_clf = search.best_estimator_.named_steps['model']
+    if isinstance(search, GridSearchCV):
+        best_clf = search.best_estimator_.named_steps['model']
+    else:
+        best_clf = search
+        
     if hasattr(best_clf, 'feature_importances_'):
         feature_imp = best_clf.feature_importances_
         sorted_idx = feature_imp.argsort()
@@ -329,7 +358,6 @@ def display_feature_imp(search, num_features):
         ax.set_yticklabels(np.array(num_features)[sorted_idx])
         ax.set_yticks(y_tick)
         ax.set_title("RF Feature Importances (MDI)")
-        
     else: #logisticclassifier
         best_coefs = best_clf.coef_[0]
 
