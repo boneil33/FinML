@@ -168,8 +168,8 @@ def cv_gs_wrap_weighted(base_clf, X, y, reg_param_name, param_space, sample_weig
         avg_score = np.array(scores).mean()
         if avg_score > output_srs['score']:
             clf.fit(X, y, model__sample_weight=sample_weight)
-            if hasattr(clf[-1], 'coef_'):
-                beta = clf[-1].coef_
+            if hasattr(clf.named_steps['model'], 'coef_'):
+                beta = clf.named_steps['model'].coef_
             else:
                 beta = None
             output_srs['beta'] = beta
