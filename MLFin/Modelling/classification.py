@@ -290,6 +290,7 @@ def display_cv_metrics(search, reg_param_name, scorer, log_scale=False):
     
     
 # look at some evaluation metrics of the training set with the optimal regularization parameter
+# look at some evaluation metrics of the training set with the optimal regularization parameter
 def display_is_metrics(search, X_train, y_train, y_prob=None, y_pred=None):
     if search is None and y_prob is None:
         raise ValueError('Need either search or y_prob/y_pred')
@@ -299,19 +300,28 @@ def display_is_metrics(search, X_train, y_train, y_prob=None, y_pred=None):
         else:
             y_prob = search.predict_proba(X_train)[:,1]
         y_pred = search.predict(X_train)
+    
+    cm = confusion_matrix(y_train, y_pred)
+    tn, fp, fn, tp = [i for i in cm.ravel()]
     precision, recall, thresh = precision_recall_curve(y_train, y_prob)
     fp_rate, tp_rate, _ = roc_curve(y_train, y_prob)
     fig, ax = plt.subplots(figsize=(8,6),nrows=2)
+    # prec/recall
     ax[0].plot(recall, precision)
+    ax[0].plot(tp/(tp+fn), tp/(tp+fp), 'bo', markersize=8, label='Decision Point')
     ax[0].set_ylabel('precision')
     ax[0].set_xlabel('recall')
+    # ROC
     ax[1].plot(fp_rate, tp_rate)
+    ax[1].plot(fp/(fp+tn), tp/(tp+fn), 'bo', markersize=8, label='Decision Point')
     ax[1].set_ylabel('true pos')
     ax[1].set_xlabel('false pos')
+    ax[1].plot([0,1],[0,1], linestyle='--', color='r', alpha=.8)
+    
     fig.tight_layout()
     fig.suptitle('In-Sample CV Metrics', y=1.05)
     plt.show()
-    cm = confusion_matrix(y_train, y_pred)
+    
     print(pd.DataFrame(cm, index=['True_0','True_1'], columns=['Pred_0','Pred_1']))
     
     
@@ -325,27 +335,37 @@ def display_oos_metrics(search, X_test, y_test, y_prob_t=None, y_pred_t=None):
         else:
             y_prob_t = search.predict_proba(X_test)[:,1]
         y_pred_t = search.predict(X_test)
+    
+    cm = confusion_matrix(y_test, y_pred_t)
+    tn, fp, fn, tp = [i for i in cm.ravel()]
     precision, recall, thresh = precision_recall_curve(y_test, y_prob_t)
     fp_rate, tp_rate, _ = roc_curve(y_test, y_prob_t)
     fig, ax = plt.subplots(figsize=(8,6),nrows=2)
+    # prec/recall
     ax[0].plot(recall, precision)
+    ax[0].plot(tp/(tp+fn), tp/(tp+fp), 'bo', markersize=8, label='Decision Point')
     ax[0].set_ylabel('precision')
     ax[0].set_xlabel('recall')
+    # ROC
     ax[1].plot(fp_rate, tp_rate)
+    ax[1].plot(fp/(fp+tn), tp/(tp+fn), 'bo', markersize=8, label='Decision Point')
     ax[1].set_ylabel('true pos')
     ax[1].set_xlabel('false pos')
     ax[1].plot([0,1],[0,1], linestyle='--', color='r', alpha=.8)
+    
     fig.tight_layout()
     fig.suptitle('Test Metrics', y=1.05)
     plt.show()
-    cm = confusion_matrix(y_test, y_pred_t)
+    
     print(pd.DataFrame(cm, index=['True_0','True_1'], columns=['Pred_0','Pred_1']))
     
     
-# for logistic regression, just the model coefficients best we can do- using l2 normalization so should shrink losers to 0
+# for logistic regression, just the model coefficients best we can do- using l1 normalization so should shrink losers to 0
 def display_feature_imp(search, num_features):
     if isinstance(search, GridSearchCV):
         best_clf = search.best_estimator_.named_steps['model']
+    elif isinstance(search, Pipeline):
+        best_clf = search.named_steps['model']
     else:
         best_clf = search
         
@@ -380,6 +400,13 @@ def display_feature_imp(search, num_features):
     fig.tight_layout()
     plt.show()
 
+    
+def get_pipe_feature_names(pipe):
+    if isinstance(output_clf.steps[-2][1], PCA):
+        feat_names = ['PC'+str(i+1) for i in np.arange(output_clf.steps[-2][1].n_components)]
+    else:
+        feat_names = output_clf.steps[-2][1].get_feature_names()
+    return feat_names
 
 if __name__=='__main__':
   # which are numeric and which are categorical
