@@ -135,7 +135,7 @@ def cv_gs_wrap_weighted(base_clf, X, y, reg_param_name, param_space, sample_weig
     :param base_clf: a classifier that implements predict, we will apply params later
     """
     if scorer not in ['accuracy', 'f1'] or sample_weight is None:
-        raise ValueError('only implemented for mean accuracy scoring with weights')
+        raise ValueError('only implemented for mean accuracy/f1 scoring with weights')
     
     
     tss = TimeSeriesSplit(n_splits=tss_splits, max_train_size=max_train_size)
